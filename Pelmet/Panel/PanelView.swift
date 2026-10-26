@@ -86,6 +86,7 @@ final class PanelDragState {
 struct PanelContent {
     var blocks: [PanelBlock] = []
     var layout: PanelGrid.Layout = .panel
+    var style: PanelOptions.Style = .tiles
     var art: [PanelTile: PanelTileArt] = [:]
     /// The widest grid: headers, the search field and the fold span it.
     var width: CGFloat = 44
@@ -155,7 +156,7 @@ struct PanelView: View {
     @Environment(\.colorScheme) private var scheme
 
     private var padding: CGFloat {
-        PanelMetrics.standard(layout: content.layout, showsNames: false).padding
+        PanelMetrics.standard(layout: content.layout, showsNames: false, style: content.style).padding
     }
 
     var body: some View {
@@ -600,6 +601,22 @@ struct PanelTileLabel: View {
 
     var body: some View {
         let metrics = grid.metrics
+        if metrics.inline, !glyphOnly {
+            // The list: the icon in its cell, the name beside it.
+            HStack(spacing: 0) {
+                glyph
+                    .frame(width: metrics.wellSize.width, height: metrics.wellSize.height)
+                Text(art.name)
+                    .font(.system(size: 12))
+                    .foregroundStyle(art.dimmed ? ink.secondary : ink.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 8)
+            }
+            .frame(width: metrics.tileSize.width, height: metrics.tileSize.height, alignment: .leading)
+            .contentShape(Rectangle())
+        } else {
         VStack(spacing: metrics.labelGap) {
             glyph
                 .frame(width: metrics.wellSize.width, height: metrics.wellSize.height)
@@ -615,6 +632,7 @@ struct PanelTileLabel: View {
         .frame(width: glyphOnly ? metrics.wellSize.width : metrics.tileSize.width,
                height: glyphOnly ? metrics.wellSize.height : metrics.tileSize.height, alignment: .top)
         .contentShape(Rectangle())
+        }
     }
 
     private var glyph: some View {
@@ -651,7 +669,7 @@ struct PanelTileLabel: View {
             .offset(x: placed.frame.minX, y: placed.frame.minY)
             .frame(width: wellSize.width, height: wellSize.height, alignment: .topLeading)
         case .icon(let icon):
-            let side = min(icon.isTemplate ? 16 : 20, room.height)
+            let side = min(icon.isTemplate ? grid.metrics.templateSide : grid.metrics.iconSide, room.height)
             Image(nsImage: icon)
                 .renderingMode(icon.isTemplate ? .template : .original)
                 .resizable()
@@ -681,12 +699,12 @@ private struct PanelTileStyle: ButtonStyle {
 
         var body: some View {
             let metrics = grid.metrics
-            let row = grid.layout == .row
             configuration.label
                 .background(alignment: .top) {
-                    RoundedRectangle(cornerRadius: row ? 8 : 13, style: .continuous)
-                        .fill(configuration.isPressed ? ink.wellPress : hovering || selected ? ink.wellHover : row ? .clear : ink.well)
-                        .frame(width: metrics.wellSize.width, height: metrics.wellSize.height)
+                    RoundedRectangle(cornerRadius: metrics.wellRadius, style: .continuous)
+                        .fill(configuration.isPressed ? ink.wellPress : hovering || selected ? ink.wellHover : metrics.restingWell ? ink.well : .clear)
+                        .frame(width: metrics.inline ? metrics.tileSize.width : metrics.wellSize.width,
+                               height: metrics.inline ? metrics.tileSize.height : metrics.wellSize.height)
                         .scaleEffect(configuration.isPressed ? 0.94 : 1)
                         // On the well alone: on the whole tile, a hover that
                         // changed with a re-layout slid the tile (2026-10-09).

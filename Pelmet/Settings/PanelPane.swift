@@ -54,7 +54,7 @@ struct PanelPane: View {
 
     /// The Icons rows and the modes that draw them.
     private static let modeRows: [String: Set<RevealTarget>] = [
-        "panelNames": [.panel], "panelColumns": [.panel], "panelClosedApps": [.panel, .row],
+        "panelStyle": [.panel], "panelNames": [.panel], "panelColumns": [.panel], "panelClosedApps": [.panel, .row],
         "panelGroups": [.panel, .row], "panelAlwaysHidden": [.panel, .row], "panelFold": [.panel],
     ]
 
@@ -77,9 +77,15 @@ struct PanelPane: View {
         let options = appState.settings.panel
         return SettingsCard(title: "Icons") {
             if target == .panel {
+                SettingRow(title: "Style", caption: styleCaption(options.style)) {
+                    PelmetSegments(selection: binding(\.style), options: [
+                        (.tiles, "Tiles"), (.tight, "Compact"), (.list, "List"),
+                    ], compact: true)
+                }
+                .settingAnchor("panelStyle")
                 SettingRow(title: "Columns",
                            caption: "Auto fits your icons. Or drag the panel's edge.") {
-                    PelmetMenuPicker(selection: binding(\.columns), options: columnChoices(options.columns))
+                    PelmetMenuPicker(selection: binding(\.columns), options: columnChoices(options.columns, style: options.style))
                 }
                 .settingAnchor("panelColumns")
             }
@@ -100,7 +106,7 @@ struct PanelPane: View {
                 .padding(.leading, 16)
                 .settingAnchor("panelFold")
             }
-            if target == .panel {
+            if target == .panel, options.style == .tiles {
                 SettingToggleRow(title: "Show names", caption: "Names under each icon. Off fits more in a row.",
                                  isOn: binding(\.showsNames))
                     .settingAnchor("panelNames")
@@ -134,9 +140,18 @@ struct PanelPane: View {
         }
     }
 
-    /// Auto and 3 to 8, plus a width the edge drag set outside them.
-    private func columnChoices(_ current: Int?) -> [(Int?, LocalizedStringKey)] {
-        var counts = Array(3...8)
+    private func styleCaption(_ style: PanelOptions.Style) -> LocalizedStringKey {
+        switch style {
+        case .tiles: "A square behind every icon."
+        case .tight: "Bigger icons, smaller squares. Fits more."
+        case .list: "Icon and name side by side."
+        }
+    }
+
+    /// Auto and 3 to 8 (1 to 4 for the list), plus a width the edge drag
+    /// set outside them.
+    private func columnChoices(_ current: Int?, style: PanelOptions.Style) -> [(Int?, LocalizedStringKey)] {
+        var counts = style == .list ? Array(1...4) : Array(3...8)
         if let current, !counts.contains(current) { counts.append(current); counts.sort() }
         return [(nil, "Auto")] + counts.map { (Optional($0), LocalizedStringKey(String($0))) }
     }

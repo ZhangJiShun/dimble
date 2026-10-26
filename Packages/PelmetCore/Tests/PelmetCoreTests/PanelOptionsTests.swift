@@ -80,4 +80,20 @@ import Testing
         options.columns = nil
         #expect(options.columnsWithNames == nil && options.columnsCompact == 7)
     }
+
+    @Test func styleKeepsItsOwnColumnsAndFallsBackPerField() throws {
+        var options = PanelOptions()
+        #expect(options.style == .tiles)
+        options.columnsCompact = 6
+        options.style = .list
+        #expect(options.columns == nil)
+        options.columns = 2
+        #expect(options.columnsList == 2 && options.columnsCompact == 6)
+        options.style = .tight
+        #expect(options.columns == 6)
+        let bad = try JSONDecoder().decode(PanelOptions.self, from: Data(#"{"style":"mosaic","columnsList":3}"#.utf8))
+        #expect(bad.style == .tiles && bad.columnsList == 3)
+        let list = try JSONDecoder().decode(PanelOptions.self, from: Data(#"{"style":"list"}"#.utf8))
+        #expect(list.style == .list)
+    }
 }

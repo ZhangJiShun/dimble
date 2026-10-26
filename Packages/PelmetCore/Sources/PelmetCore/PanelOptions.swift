@@ -31,7 +31,19 @@ public struct PanelOptions: Codable, Equatable, Sendable {
         case handle
     }
 
-    /// A name under every tile.
+    /// How the panel lays its icons out.
+    public enum Style: String, Codable, CaseIterable, Sendable {
+        /// A well per icon, as the panel has always drawn it. Names, when on,
+        /// go under the tiles.
+        case tiles
+        /// Smaller wells hugging bigger icons.
+        case tight
+        /// Icon and name on one row, a well only under the pointer.
+        case list
+    }
+
+    public var style: Style = .tiles
+    /// A name under every tile (the tiles style).
     public var showsNames: Bool = false
     /// Dimmed tiles for apps in a section that aren't running, a click
     /// opens one. Off, a search in the panel still finds them.
@@ -41,6 +53,7 @@ public struct PanelOptions: Codable, Equatable, Sendable {
     /// Nil is Auto, `autoColumns`.
     public var columnsWithNames: Int?
     public var columnsCompact: Int?
+    public var columnsList: Int?
     /// A Pelmet separator starts a new row of tiles instead of being dropped.
     public var separatorsBreakRows: Bool = false
     public var alwaysHidden: AlwaysHiddenMode = .folded
@@ -58,14 +71,24 @@ public struct PanelOptions: Codable, Equatable, Sendable {
 
     /// The setting for the current names mode.
     public var columns: Int? {
-        get { showsNames ? columnsWithNames : columnsCompact }
+        get {
+            switch style {
+            case .list: columnsList
+            case .tight: columnsCompact
+            case .tiles: showsNames ? columnsWithNames : columnsCompact
+            }
+        }
         set {
-            if showsNames { columnsWithNames = newValue } else { columnsCompact = newValue }
+            switch style {
+            case .list: columnsList = newValue
+            case .tight: columnsCompact = newValue
+            case .tiles: if showsNames { columnsWithNames = newValue } else { columnsCompact = newValue }
+            }
         }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case showsNames, columnsWithNames, columnsCompact, separatorsBreakRows, alwaysHidden, alwaysHiddenOpen
+        case style, columnsList, showsNames, columnsWithNames, columnsCompact, separatorsBreakRows, alwaysHidden, alwaysHiddenOpen
         case alwaysHiddenFold, showsClosedApps
     }
 
@@ -79,6 +102,8 @@ public struct PanelOptions: Codable, Equatable, Sendable {
             c.field(Int?.self, key, nil)
                 .map { min(max($0, Self.columnRange.lowerBound), Self.columnRange.upperBound) }
         }
+        style = c.field(Style.self, .style, defaults.style)
+        columnsList = count(.columnsList)
         showsNames = c.field(Bool.self, .showsNames, defaults.showsNames)
         columnsWithNames = count(.columnsWithNames)
         columnsCompact = count(.columnsCompact)

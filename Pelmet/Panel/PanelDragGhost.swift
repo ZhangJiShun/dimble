@@ -21,7 +21,7 @@ final class PanelDragGhost {
     init(art: PanelTileArt, grid: PanelGrid, appearance: NSAppearance?) {
         let well = grid.metrics.wellSize
         let size = CGSize(width: (well.width * Self.scale).rounded(.up), height: (well.height * Self.scale).rounded(.up))
-        let radius: CGFloat = (grid.layout == .row ? 8 : 13) * Self.scale
+        let radius: CGFloat = grid.metrics.wellRadius * Self.scale
         let hosting = NSHostingView(rootView: Face(art: art, grid: grid, scale: Self.scale))
         hosting.sizingOptions = []
         window = GlassPanel(content: hosting, cornerRadius: radius)
@@ -92,7 +92,7 @@ final class PanelDragGhost {
             let ink = PanelInk(scheme: scheme)
             let well = grid.metrics.wellSize
             ZStack {
-                RoundedRectangle(cornerRadius: grid.layout == .row ? 8 : 13, style: .continuous)
+                RoundedRectangle(cornerRadius: grid.metrics.wellRadius, style: .continuous)
                     .fill(ink.wellHover)
                 PanelTileLabel(art: art, grid: grid, ink: ink, glyphOnly: true)
             }

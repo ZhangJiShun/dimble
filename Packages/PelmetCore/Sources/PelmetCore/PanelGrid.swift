@@ -26,6 +26,18 @@ public struct PanelMetrics: Equatable, Sendable {
     public var groupGap: CGFloat
     /// A separator in the row layout: a thin divider between icons.
     public var dividerWidth: CGFloat
+    /// The side of a full-colour icon, and of a one-colour (template) one,
+    /// at most: the well less its margin still caps both.
+    public var iconSide: CGFloat = 20
+    public var templateSide: CGFloat = 16
+    /// The name sits beside the icon, on one row (the list), not under it.
+    public var inline = false
+    /// The tile's fill at rest. Off, the well shows only on hover, press
+    /// and selection.
+    public var restingWell = true
+    public var wellRadius: CGFloat = 13
+    /// What Auto means for a grid in this style.
+    public var autoColumns = PanelOptions.autoColumns
 
     public static let compact = PanelMetrics(
         tileSize: CGSize(width: 44, height: 44), wellSize: CGSize(width: 44, height: 44),
@@ -40,12 +52,33 @@ public struct PanelMetrics: Equatable, Sendable {
     public static let row = PanelMetrics(
         tileSize: CGSize(width: 34, height: 28), wellSize: CGSize(width: 34, height: 28),
         columnGap: 0, rowGap: 2, padding: 5, labelGap: 0, labelHeight: 0,
-        groupGap: 0, dividerWidth: 13)
+        groupGap: 0, dividerWidth: 13, restingWell: false, wellRadius: 8)
 
-    public static func standard(layout: PanelGrid.Layout, showsNames: Bool) -> PanelMetrics {
+    /// Tight tiles: the well only a little larger than a bigger icon.
+    public static let tight = PanelMetrics(
+        tileSize: CGSize(width: 38, height: 38), wellSize: CGSize(width: 38, height: 38),
+        columnGap: 4, rowGap: 4, padding: 8, labelGap: 0, labelHeight: 0,
+        groupGap: 4, dividerWidth: 0, iconSide: 27, templateSide: 20, wellRadius: 11)
+
+    /// A list: icon and name on one row, no fill until hover or selection.
+    /// The well is the icon's cell; the tile is the whole row.
+    public static let list = PanelMetrics(
+        tileSize: CGSize(width: 124, height: 34), wellSize: CGSize(width: 34, height: 34),
+        columnGap: 2, rowGap: 2, padding: 8, labelGap: 0, labelHeight: 0,
+        groupGap: 4, dividerWidth: 0, iconSide: 22, templateSide: 18, inline: true,
+        restingWell: false, wellRadius: 10, autoColumns: 2)
+
+    public static func standard(
+        layout: PanelGrid.Layout, showsNames: Bool, style: PanelOptions.Style = .tiles
+    ) -> PanelMetrics {
         switch layout {
         case .row: .row
-        case .panel: showsNames ? .named : .compact
+        case .panel:
+            switch style {
+            case .tiles: showsNames ? .named : .compact
+            case .tight: .tight
+            case .list: .list
+            }
         }
     }
 }
@@ -99,12 +132,15 @@ public struct PanelGrid: Equatable, Sendable {
         columns: Int?,
         layout: Layout,
         showsNames: Bool,
+        style: PanelOptions.Style = .tiles,
         minimumColumns: Int = 1,
         maxWidth: CGFloat? = nil,
         metrics: PanelMetrics? = nil
     ) {
-        let names = layout == .panel && showsNames
-        let metrics = metrics ?? .standard(layout: layout, showsNames: names)
+        // Names under the tiles are the tiles style's; the list carries its
+        // own beside the icon, and tight tiles have none.
+        let names = layout == .panel && showsNames && style == .tiles
+        let metrics = metrics ?? .standard(layout: layout, showsNames: names, style: style)
         self.layout = layout
         self.showsNames = names
         self.metrics = metrics
@@ -115,7 +151,7 @@ public struct PanelGrid: Equatable, Sendable {
         switch layout {
         case .panel:
             let groups = Self.groups(of: tiles)
-            let count = Self.columnCount(maximum: columns, tiles: tiles, minimum: minimumColumns)
+            let count = Self.columnCount(maximum: columns, tiles: tiles, minimum: minimumColumns, auto: metrics.autoColumns)
             var y: CGFloat = 0
             for group in groups {
                 for start in stride(from: 0, to: group.count, by: count) {
@@ -232,12 +268,15 @@ public struct PanelGrid: Equatable, Sendable {
 
     /// Columns the panel layout gives these tiles: no wider than the widest
     /// group, at most `maximum` (nil is Auto, 5), at least `minimum`.
-    public static func neededColumns(of tiles: [PanelTile], maximum: Int?) -> Int {
-        columnCount(maximum: maximum, tiles: tiles, minimum: 1)
+    public static func neededColumns(
+        of tiles: [PanelTile], maximum: Int?, style: PanelOptions.Style = .tiles
+    ) -> Int {
+        columnCount(maximum: maximum, tiles: tiles, minimum: 1,
+                    auto: PanelMetrics.standard(layout: .panel, showsNames: false, style: style).autoColumns)
     }
 
-    private static func columnCount(maximum: Int?, tiles: [PanelTile], minimum: Int) -> Int {
-        let most = max(1, maximum ?? PanelOptions.autoColumns)
+    private static func columnCount(maximum: Int?, tiles: [PanelTile], minimum: Int, auto: Int) -> Int {
+        let most = max(1, maximum ?? auto)
         let widest = groups(of: tiles).map(\.count).max() ?? 0
         return min(most, max(widest, minimum, 1))
     }

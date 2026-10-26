@@ -74,6 +74,8 @@ enum SettingsIndex {
 
             panel("hiddenIconsIn", String(localized: "Show hidden icons in"),
                   ["panel", "grid", "row", "notch", "overflow", "dropdown", "tray", "layout"]),
+            panel("panelStyle", String(localized: "Style"),
+                  ["compact", "tiles", "list", "tight", "layout", "look", "panel"]),
             panel("panelNames", String(localized: "Show names"),
                   ["labels", "names", "titles", "panel"]),
             panel("panelColumns", String(localized: "Columns"),

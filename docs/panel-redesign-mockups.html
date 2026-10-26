@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dimble 面板改版效果图</title>
+<style>
+:root{
+  --ink:#1d1d1f; --ink2:#6e6e73; --page:#ececee; --card:#fff;
+  --glass:rgba(250,250,252,.62); --glass-edge:rgba(0,0,0,.14);
+  --well:rgba(0,0,0,.055); --well-hover:rgba(0,0,0,.10); --well-sel:rgba(10,100,255,.16); --sel-ring:rgba(10,100,255,.55);
+  --plate:rgba(0,0,0,.045); --label:#1d1d1f; --muted:rgba(0,0,0,.45);
+  --bar:rgba(255,255,255,.55); --bar-ink:#1d1d1f;
+  --wall:linear-gradient(135deg,#d9c9b3 0%,#c8b79e 40%,#a98f78 100%);
+}
+body.dark{
+  --ink:#f5f5f7; --ink2:#a1a1a6; --page:#161618; --card:#232326;
+  --glass:rgba(48,48,54,.62); --glass-edge:rgba(255,255,255,.16);
+  --well:rgba(255,255,255,.075); --well-hover:rgba(255,255,255,.14); --well-sel:rgba(60,140,255,.30); --sel-ring:rgba(90,160,255,.7);
+  --plate:rgba(255,255,255,.06); --label:#f5f5f7; --muted:rgba(255,255,255,.5);
+  --bar:rgba(30,30,34,.55); --bar-ink:#f5f5f7;
+  --wall:linear-gradient(135deg,#3a3f4f 0%,#2a2d3a 45%,#1d1f2a 100%);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;transition:background .2s}
+header{max-width:1180px;margin:0 auto;padding:28px 24px 8px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+h1{font-size:20px;margin:0;font-weight:600}
+.sub{color:var(--ink2);font-size:13px;flex:1;min-width:260px}
+.toggle{display:flex;background:var(--card);border-radius:9px;padding:3px;gap:2px}
+.toggle button{border:0;background:transparent;color:var(--ink2);padding:5px 14px;border-radius:7px;font:inherit;font-size:13px;cursor:pointer}
+.toggle button.on{background:var(--page);color:var(--ink)}
+main{max-width:1180px;margin:0 auto;padding:12px 24px 48px;display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:18px}
+.opt{background:var(--card);border-radius:16px;padding:16px 16px 14px}
+.opt h2{font-size:15px;margin:0 0 2px;font-weight:600}
+.opt p{margin:0 0 12px;color:var(--ink2);font-size:12.5px;min-height:38px}
+.opt .spec{margin:10px 0 0;color:var(--ink2);font-size:12px;min-height:0}
+.stage{position:relative;height:300px;border-radius:12px;overflow:hidden;background:var(--wall)}
+.doc{position:absolute;left:0;right:0;top:34px;bottom:0;padding:18px 20px;font:13px/1.8 ui-monospace,Menlo,monospace;color:rgba(0,0,0,.55);background:rgba(255,255,255,.55)}
+body.dark .doc{color:rgba(255,255,255,.4);background:rgba(0,0,0,.28)}
+.bar{position:absolute;left:0;right:0;top:0;height:34px;background:var(--bar);backdrop-filter:blur(24px) saturate(1.6);display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:0 14px;color:var(--bar-ink)}
+.bar .g{width:15px;height:15px;display:grid;grid-template-columns:1fr 1fr;gap:2px}
+.bar .g i{border:1.6px solid currentColor;border-radius:3px}
+.bar .chev{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle,#f2994a 0 28%,#e8d9c8 30% 100%);border:1px solid rgba(0,0,0,.2)}
+.bar .t{font-size:12.5px}
+.panel{position:absolute;top:34px;right:10px;background:var(--glass);backdrop-filter:blur(36px) saturate(1.8);-webkit-backdrop-filter:blur(36px) saturate(1.8);border-radius:20px;box-shadow:0 0 0 .5px var(--glass-edge),0 14px 40px rgba(0,0,0,.28)}
+.cell{display:flex;align-items:center;justify-content:center;position:relative}
+.cell.well{background:var(--well)}
+.cell.hov{background:var(--well-hover)}
+.cell.sel{background:var(--well-sel);box-shadow:inset 0 0 0 1.5px var(--sel-ring)}
+.ic{display:block;filter:drop-shadow(0 .5px 1px rgba(0,0,0,.25))}
+.name{font-size:11px;color:var(--label);white-space:nowrap}
+.sec{font-size:11px;color:var(--muted);padding:0 4px 4px}
+.note{max-width:1180px;margin:0 auto;padding:0 24px 40px;color:var(--ink2);font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>面板改版效果图</h1></div>
+  <div class="sub">按真实尺寸绘制(1 CSS 像素 = 1 pt)。现状取自代码:格子 44pt,间距 6pt,边距 10pt,格子圆角 13pt,面板圆角 20pt,图标约 17pt。</div>
+  <div class="toggle"><button id="bl" class="on">浅色</button><button id="bd">深色</button></div>
+</header>
+<main id="main"></main>
+<div class="note">图标为示意绘制,真实面板里是各 App 自己的图标。悬停(灰色)与选中(蓝色)各画了一个,方便比较状态反馈。</div>
+
+<script>
+const icons = [
+ `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#fff"/><circle cx="20" cy="20" r="11" fill="none" stroke="#2f7cf6" stroke-width="5"/><circle cx="20" cy="20" r="4" fill="#7fb4ff"/></svg>`,
+ `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#c9ced6"/><path d="M20 7l11 6.5v13L20 33 9 26.5v-13z" fill="#fff" stroke="#4a8bd8" stroke-width="2.5"/><circle cx="20" cy="20" r="4" fill="#4a8bd8"/></svg>`,
+ `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#1b6ff0"/><path d="M6 30L22 8l6 6-12 18z" fill="#fff" opacity=".92"/><path d="M20 32l14-14" stroke="#ff9f1a" stroke-width="5" stroke-linecap="round"/></svg>`,
+ `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#fff"/><circle cx="20" cy="21" r="12" fill="#c99be8"/><path d="M10 14l3-8 6 5zM30 14l-3-8-6 5z" fill="#c99be8"/><circle cx="16" cy="20" r="2" fill="#2b1b3a"/><circle cx="24" cy="20" r="2" fill="#2b1b3a"/></svg>`,
+ `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#171827"/><circle cx="20" cy="20" r="10" fill="none" stroke="#7d6bff" stroke-width="4"/><circle cx="20" cy="20" r="3.5" fill="#ff5da2"/></svg>`,
+ `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#fff"/><path d="M11 8l22 12-22 12z" fill="#19c37d"/><path d="M11 8l22 12-11 6z" fill="#1d8bff"/><path d="M11 32L22 26l11-6z" fill="#ffc21a" opacity=".9"/></svg>`,
+ `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#efe5cf"/><ellipse cx="20" cy="23" rx="12" ry="7" fill="#2f2a22"/><circle cx="14" cy="17" r="3" fill="#2f2a22"/><circle cx="26" cy="17" r="3" fill="#2f2a22"/></svg>`,
+ `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#ff5c93"/><rect x="8" y="13" width="24" height="17" rx="5" fill="#fff"/><circle cx="15" cy="21" r="2" fill="#ff5c93"/><circle cx="25" cy="21" r="2" fill="#ff5c93"/></svg>`
+];
+const names=['Cloud','Notes','Canvas','Cat','Orbit','Video','Frog','Bili'];
+const ic=(k,s)=>`<span class="ic" style="width:${s}px;height:${s}px">${icons[k].replace('<svg','<svg width="'+s+'" height="'+s+'"')}</span>`;
+
+const grid=(cols,gap,pad,cell,icon,opt)=>{
+  const o=opt||{};
+  return `<div class="panel" style="padding:${pad}px"><div style="display:grid;grid-template-columns:repeat(${cols},${cell}px);gap:${gap}px">`+
+  icons.map((_,k)=>{
+    const st=k==1?'hov':k==2?'sel':'';
+    const cls=(o.well?'well ':'')+st;
+    const rad=o.r||13;
+    return `<div class="cell ${cls}" style="width:${cell}px;height:${cell}px;border-radius:${rad}px">${ic(k,icon)}</div>`;
+  }).join('')+`</div></div>`;
+};
+
+const options=[
+ {t:'0 · 现状',d:'每个图标一块灰底,格子 44pt,图标只有约 17pt,底比图标大很多。',
+  spec:'格子 44 · 图标 17 · 间距 6 · 边距 10 · 圆角 13',
+  h:()=>grid(5,6,10,44,17,{well:true,r:13})},
+ {t:'A · 去掉格子底',d:'图标直接放在玻璃上,放大到 30pt。只有悬停和选中才出现浅色底。最简洁。',
+  spec:'格子 40 · 图标 30 · 间距 4 · 边距 8 · 无常驻底',
+  h:()=>grid(4,4,8,40,30,{r:12})},
+ {t:'B · 紧凑格子',d:'保留每格一块底,但底只比图标大一圈:图标占格子约 70%。仍有"一格一个"的明确感觉。',
+  spec:'格子 38 · 图标 27 · 间距 4 · 边距 8 · 圆角 11',
+  h:()=>grid(4,4,8,38,27,{well:true,r:11})},
+ {t:'C · 图标加名字',d:'去掉底,两列"图标 + 名字",不用悬停就能认出是谁。面板更宽。',
+  spec:'行高 34 · 图标 22 · 两列 · 无常驻底',
+  h:()=>`<div class="panel" style="padding:8px"><div style="display:grid;grid-template-columns:repeat(2,120px);gap:2px">`+icons.map((_,k)=>`<div class="cell ${k==1?'hov':k==2?'sel':''}" style="height:34px;border-radius:10px;justify-content:flex-start;gap:9px;padding:0 8px">${ic(k,22)}<span class="name">${names[k]}</span></div>`).join('')+`</div></div>`},
+ {t:'D · 单行横条',d:'图标排成一条贴在菜单栏下,像菜单栏的延伸。适合图标少的人,超过一行才换行。这是代码里已有的 row 布局。',
+  spec:'格子 34×28 · 图标 22 · 无间距 · 边距 5',
+  h:()=>`<div class="panel" style="padding:5px;border-radius:14px"><div style="display:flex">`+icons.map((_,k)=>`<div class="cell ${k==1?'hov':k==2?'sel':''}" style="width:34px;height:28px;border-radius:8px">${ic(k,20)}</div>`).join('')+`</div></div>`},
+ {t:'E · 整组一块底板',d:'一个分组共用一块浅色底板,不再每个图标一个框。能区分 Hidden 和 Always Hidden。',
+  spec:'格子 44 · 图标 30 · 底板圆角 14 · 带分组标题',
+  h:()=>`<div class="panel" style="padding:8px;border-radius:18px"><div class="sec">Hidden</div><div style="background:var(--plate);border-radius:14px;padding:5px"><div style="display:grid;grid-template-columns:repeat(4,44px);gap:2px">`+icons.map((_,k)=>`<div class="cell ${k==1?'hov':k==2?'sel':''}" style="width:44px;height:44px;border-radius:11px">${ic(k,30)}</div>`).join('')+`</div></div></div>`}
+];
+
+const doc=`# README.md
+const panel = hiddenIcons.map(icon =>
+  tile(icon)  // 面板正文背景
+);
+statusItem.reveal({ section: 'hidden' });
+export default Dimble;`;
+
+document.getElementById('main').innerHTML=options.map(o=>`
+<section class="opt"><h2>${o.t}</h2><p>${o.d}</p>
+<div class="stage" style="zoom:1"><div class="doc">${doc.replace(/\n/g,'<br>')}</div>
+<div class="bar"><span class="t">Dimble</span><div class="g"><i></i><i></i><i></i><i></i></div><div class="chev"></div></div>
+${o.h()}</div><p class="spec">${o.spec}</p></section>`).join('');
+
+const setMode=d=>{document.body.classList.toggle('dark',d);bl.classList.toggle('on',!d);bd.classList.toggle('on',d)};
+bl.onclick=()=>setMode(false);bd.onclick=()=>setMode(true);
+</script>
+</body>
+</html>

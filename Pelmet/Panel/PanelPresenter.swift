@@ -1052,9 +1052,10 @@ final class PanelPresenter: RevealPresenter {
 
         let columns = options.columns
         let minimum = shown.filter { !$0.folded }
-            .map { PanelGrid.neededColumns(of: $0.section.tiles, maximum: columns) }.max() ?? 1
+            .map { PanelGrid.neededColumns(of: $0.section.tiles, maximum: columns, style: options.style) }.max() ?? 1
         let didntFitShown = shown.contains { $0.section.kind == .didntFit }
         var content = PanelContent(layout: layout, query: query)
+        content.style = options.style
         content.hasAlwaysHidden = model.sections.contains { $0.kind == .alwaysHidden && $0.count > 0 }
         content.showsAlwaysHidden = alwaysShown
         content.motion = Self.foldStyle(appState.settings.revealAnimation)
@@ -1063,7 +1064,8 @@ final class PanelPresenter: RevealPresenter {
             PanelBlock(
                 kind: entry.section.kind,
                 grid: PanelGrid(tiles: entry.section.tiles, columns: columns, layout: layout,
-                                showsNames: options.showsNames, minimumColumns: minimum, maxWidth: maxRowWidth),
+                                showsNames: options.showsNames, style: options.style,
+                                minimumColumns: minimum, maxWidth: maxRowWidth),
                 // The tile in the air is not one more behind the fold.
                 count: layout == .panel ? base.section(entry.section.kind)?.count ?? entry.section.count : entry.section.count,
                 showsHeader: layout == .panel && (entry.section.kind == .didntFit || (entry.section.kind == .hidden && didntFitShown)),
@@ -1743,16 +1745,24 @@ final class PanelPresenter: RevealPresenter {
     /// column. Two at least, no more than the widest section of `model` can
     /// fill, ten at most. Stored for the current names mode, and saved once
     /// the drag is let go (`ended`); returned for the tip.
+    /// The panel's look, from its right-click menu.
+    private func setStyle(_ style: PanelOptions.Style) {
+        guard let appState, appState.settings.panel.style != style else { return }
+        appState.settings.panel.style = style
+        appState.settingsChanged()
+        if isOpen { refresh() }
+    }
+
     @discardableResult
     func setColumns(distance: CGFloat, model: PanelModel?, ended: Bool) -> Int {
         guard let appState else { return 0 }
         let options = appState.settings.panel
-        let metrics = PanelMetrics.standard(layout: .panel, showsNames: options.showsNames)
+        let metrics = PanelMetrics.standard(layout: .panel, showsNames: options.showsNames, style: options.style)
         let pitch = metrics.tileSize.width + metrics.columnGap
         let want = Int(((distance - metrics.padding + metrics.columnGap) / pitch).rounded())
         let range = PanelOptions.columnRange
         let most = max(range.lowerBound,
-                       model?.sections.map { PanelGrid.neededColumns(of: $0.tiles, maximum: range.upperBound) }.max() ?? range.lowerBound)
+                       model?.sections.map { PanelGrid.neededColumns(of: $0.tiles, maximum: range.upperBound, style: options.style) }.max() ?? range.lowerBound)
         let columns = min(max(want, range.lowerBound), most)
         if options.columns != columns {
             appState.settings.panel.columns = columns
@@ -1917,7 +1927,12 @@ final class PanelPresenter: RevealPresenter {
             .check(String(localized: "Panel"), layout == .panel) { [weak self] in self?.setTarget(.panel) },
             .check(String(localized: "Row"), layout == .row) { [weak self] in self?.setTarget(.row) },
             .divider,
-            .check(String(localized: "Show Names"), appState.settings.panel.showsNames, enabled: layout == .panel) { [weak self] in
+            .check(String(localized: "Tiles"), appState.settings.panel.style == .tiles, enabled: layout == .panel) { [weak self] in self?.setStyle(.tiles) },
+            .check(String(localized: "Compact"), appState.settings.panel.style == .tight, enabled: layout == .panel) { [weak self] in self?.setStyle(.tight) },
+            .check(String(localized: "List"), appState.settings.panel.style == .list, enabled: layout == .panel) { [weak self] in self?.setStyle(.list) },
+            .divider,
+            .check(String(localized: "Show Names"), appState.settings.panel.showsNames,
+                   enabled: layout == .panel && appState.settings.panel.style == .tiles) { [weak self] in
                 guard let self, let appState = self.appState else { return }
                 appState.settings.panel.showsNames.toggle()
                 appState.settingsChanged()

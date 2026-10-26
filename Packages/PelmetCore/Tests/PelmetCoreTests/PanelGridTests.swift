@@ -228,4 +228,22 @@ import Testing
         #expect(g.neighbour(of: t(9), toward: .left) == nil)
         #expect(g.firstTile == t(0))
     }
+
+    @Test func styleChoosesMetricsAndAuto() {
+        #expect(PanelMetrics.standard(layout: .panel, showsNames: true, style: .tight) == .tight)
+        #expect(PanelMetrics.standard(layout: .panel, showsNames: true, style: .list) == .list)
+        #expect(PanelMetrics.standard(layout: .row, showsNames: false, style: .list) == .row)
+        #expect(PanelMetrics.tight.iconSide > PanelMetrics.compact.iconSide)
+        #expect(PanelMetrics.list.inline && !PanelMetrics.list.restingWell)
+        // Names under tiles belong to the tiles style only.
+        let tight = PanelGrid(tiles: (0..<8).map { PanelTile.item(.bundleKey("a\($0)")) }, columns: nil,
+                              layout: .panel, showsNames: true, style: .tight)
+        #expect(!tight.showsNames && tight.columnCount == 5)
+        // The list's Auto is two columns, and a stored width still wins.
+        let tiles = (0..<8).map { PanelTile.item(.bundleKey("a\($0)")) }
+        let list = PanelGrid(tiles: tiles, columns: nil, layout: .panel, showsNames: true, style: .list)
+        #expect(!list.showsNames && list.columnCount == 2 && list.rows.count == 4)
+        #expect(PanelGrid(tiles: tiles, columns: 3, layout: .panel, showsNames: false, style: .list).columnCount == 3)
+        #expect(PanelGrid.neededColumns(of: tiles, maximum: nil, style: .list) == 2)
+    }
 }
