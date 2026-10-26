@@ -48,11 +48,14 @@ public struct PanelOptions: Codable, Equatable, Sendable {
     /// Dimmed tiles for apps in a section that aren't running, a click
     /// opens one. Off, a search in the panel still finds them.
     public var showsClosedApps: Bool = false
-    /// The most columns a row may have, one per names mode: the user sets
-    /// them by dragging the panel's edge, and each mode keeps its own width.
-    /// Nil is Auto, `autoColumns`.
+    /// The most columns a row may have, one per style and names mode: the
+    /// user sets them by dragging the panel's edge, and each keeps its own
+    /// width. `columnsCompact` is the tiles style without names, `columnsTight`
+    /// the tight style (it used to share `columnsCompact`). Nil is Auto,
+    /// `autoColumns`.
     public var columnsWithNames: Int?
     public var columnsCompact: Int?
+    public var columnsTight: Int?
     public var columnsList: Int?
     /// A Pelmet separator starts a new row of tiles instead of being dropped.
     public var separatorsBreakRows: Bool = false
@@ -74,21 +77,21 @@ public struct PanelOptions: Codable, Equatable, Sendable {
         get {
             switch style {
             case .list: columnsList
-            case .tight: columnsCompact
+            case .tight: columnsTight
             case .tiles: showsNames ? columnsWithNames : columnsCompact
             }
         }
         set {
             switch style {
             case .list: columnsList = newValue
-            case .tight: columnsCompact = newValue
+            case .tight: columnsTight = newValue
             case .tiles: if showsNames { columnsWithNames = newValue } else { columnsCompact = newValue }
             }
         }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case style, columnsList, showsNames, columnsWithNames, columnsCompact, separatorsBreakRows, alwaysHidden, alwaysHiddenOpen
+        case style, columnsList, showsNames, columnsWithNames, columnsCompact, columnsTight, separatorsBreakRows, alwaysHidden, alwaysHiddenOpen
         case alwaysHiddenFold, showsClosedApps
     }
 
@@ -107,10 +110,32 @@ public struct PanelOptions: Codable, Equatable, Sendable {
         showsNames = c.field(Bool.self, .showsNames, defaults.showsNames)
         columnsWithNames = count(.columnsWithNames)
         columnsCompact = count(.columnsCompact)
+        // Saved before the tight style had its own width: it shared
+        // `columnsCompact`, so start from that and let them part ways. Once
+        // saved, `columnsTight` is always written (null for Auto), so this
+        // runs only for a blob that predates the field.
+        columnsTight = c.contains(.columnsTight) ? count(.columnsTight) : columnsCompact
         separatorsBreakRows = c.field(Bool.self, .separatorsBreakRows, defaults.separatorsBreakRows)
         alwaysHidden = c.field(AlwaysHiddenMode.self, .alwaysHidden, defaults.alwaysHidden)
         alwaysHiddenOpen = c.field(Bool.self, .alwaysHiddenOpen, defaults.alwaysHiddenOpen)
         alwaysHiddenFold = c.field(AlwaysHiddenFold.self, .alwaysHiddenFold, defaults.alwaysHiddenFold)
         showsClosedApps = c.field(Bool.self, .showsClosedApps, defaults.showsClosedApps)
+    }
+
+    /// Written by hand so `columnsTight` is always present, null for Auto: a
+    /// missing key is how the decoder tells a blob from before the field.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(style, forKey: .style)
+        try c.encode(showsNames, forKey: .showsNames)
+        try c.encode(showsClosedApps, forKey: .showsClosedApps)
+        try c.encodeIfPresent(columnsWithNames, forKey: .columnsWithNames)
+        try c.encodeIfPresent(columnsCompact, forKey: .columnsCompact)
+        try c.encode(columnsTight, forKey: .columnsTight)
+        try c.encodeIfPresent(columnsList, forKey: .columnsList)
+        try c.encode(separatorsBreakRows, forKey: .separatorsBreakRows)
+        try c.encode(alwaysHidden, forKey: .alwaysHidden)
+        try c.encode(alwaysHiddenOpen, forKey: .alwaysHiddenOpen)
+        try c.encode(alwaysHiddenFold, forKey: .alwaysHiddenFold)
     }
 }

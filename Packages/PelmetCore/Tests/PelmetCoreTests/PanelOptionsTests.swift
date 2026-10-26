@@ -90,10 +90,55 @@ import Testing
         options.columns = 2
         #expect(options.columnsList == 2 && options.columnsCompact == 6)
         options.style = .tight
-        #expect(options.columns == 6)
+        #expect(options.columns == nil)
         let bad = try JSONDecoder().decode(PanelOptions.self, from: Data(#"{"style":"mosaic","columnsList":3}"#.utf8))
         #expect(bad.style == .tiles && bad.columnsList == 3)
         let list = try JSONDecoder().decode(PanelOptions.self, from: Data(#"{"style":"list"}"#.utf8))
         #expect(list.style == .list)
+    }
+
+    // The tiles style without names and the tight style each keep their own
+    // width: dragging one leaves the other where it was.
+    @Test func tightAndPlainTilesDoNotShareAWidth() {
+        var options = PanelOptions()
+        options.style = .tight
+        options.columns = 3
+        options.style = .tiles
+        #expect(options.columns == nil)
+        options.columns = 8
+        #expect(options.columnsCompact == 8 && options.columnsTight == 3)
+        options.style = .tight
+        #expect(options.columns == 3)
+        options.columns = nil
+        options.style = .tiles
+        #expect(options.columns == 8)
+    }
+
+    // A blob saved before the tight style had its own width: both start from
+    // the shared value, then part ways.
+    @Test func olderBlobSeedsTightFromTheSharedWidth() throws {
+        var options = try decode(#"{"style":"tight","columnsCompact":4}"#)
+        #expect(options.columnsCompact == 4 && options.columnsTight == 4)
+        options.columns = 6
+        #expect(options.columnsCompact == 4 && options.columnsTight == 6)
+    }
+
+    // Auto saved for the tight style stays Auto: the null is written, so the
+    // next load doesn't mistake it for an older blob and seed it again.
+    @Test func tightAutoSurvivesASaveWhileCompactHasAWidth() throws {
+        var options = PanelOptions()
+        options.columnsCompact = 4
+        options.style = .tight
+        options.columns = nil
+        let back = try JSONDecoder().decode(PanelOptions.self, from: JSONEncoder().encode(options))
+        #expect(back.columnsTight == nil && back.columnsCompact == 4)
+        #expect(back == options)
+    }
+
+    @Test func tightWidthIsPulledIntoReach() throws {
+        let wild = try decode(#"{"columnsTight":99}"#)
+        #expect(wild.columnsTight == PanelOptions.columnRange.upperBound)
+        let bad = try decode(#"{"columnsTight":"wide","columnsCompact":5}"#)
+        #expect(bad.columnsCompact == 5)
     }
 }
