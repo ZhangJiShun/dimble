@@ -8,6 +8,20 @@ import PelmetEngine
 import ServiceManagement
 import SwiftUI
 
+/// Where a reveal was decided (`AppState.revealDecision(for:)`): the display
+/// and what it shows the hidden icons in.
+struct RevealDecision: Equatable {
+    var display: CGDirectDisplayID?
+    var uuid: String?
+    var target: RevealTarget
+    /// Went where the display's choice said: false for the reasons that
+    /// need the bar whatever it says (`RevealRouting.needsBar`).
+    var followsChoice = true
+    /// The other displays that hide icons keep their bars concealed: every
+    /// reveal but the ones that need every bar (Apply, the editor).
+    var holdsOthers = true
+}
+
 @Observable
 final class AppState {
     let engine = AgentBarEngine()
@@ -89,6 +103,11 @@ final class AppState {
     /// The panel is drawing the reveal: the machine says revealed, the bar
     /// itself stays concealed.
     var panelShowsReveal: Bool { revealPresenter === panelPresenter }
+    /// The display the reveal that is up was decided on, and where it shows
+    /// the hidden icons there (`.menuBar` when the bar drew it). Kept until
+    /// it conceals: the pointer moving to another display doesn't re-route
+    /// it. nil at rest.
+    @ObservationIgnored private(set) var revealDecision: RevealDecision?
     /// Per revealed section, its items left to right as the last reveal
     /// settle read them off the bar. Memory only: the panel's tile order
     /// (`PanelModel.build(drawnOrder:)`), since the bar's order is read and
@@ -196,15 +215,17 @@ final class AppState {
     @ObservationIgnored private var debugPanelShotObserver: NSObjectProtocol?
 
     /// Panel spike S1: `defaults write app.fif7y.Pelmet pelmet.debug.picturePass
-    /// -bool YES`, relaunch, then post `app.fif7y.Pelmet.debug.picturePass`.
+    /// -bool YES`, relaunch, then post `app.fif7y.Pelmet.debug.picturePass`
+    /// (object `always`: Always Hidden too).
     private func observeDebugPicturePass() {
         guard UserDefaults.standard.bool(forKey: "pelmet.debug.picturePass") else { return }
         debugPicturePassObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("app.fif7y.Pelmet.debug.picturePass"), object: nil, queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] note in
+            let always = note.object as? String == "always"
             MainActor.assumeIsolated {
                 guard let self else { return }
-                Task { await self.transitions.debugPicturePass() }
+                Task { await self.transitions.debugPicturePass(always: always) }
             }
         }
         PelmetLog.log("pass: debug trigger on — app.fif7y.Pelmet.debug.picturePass")
@@ -213,6 +234,9 @@ final class AppState {
     @ObservationIgnored private var debugPicturePassObserver: NSObjectProtocol?
 
     private func wireTransitionSettleCallbacks() {
+        ConcealGhostOverlay.onHeldBarClick = { [weak self] display, clicks in
+            self?.heldBarClicked(display: display, clickCount: clicks)
+        }
         transitions.onRevealSettled = { [weak self] in
             guard let self else { return }
             dispatch(rehide.handle(.transitionSettled))
@@ -233,6 +257,7 @@ final class AppState {
             guard let self else { return }
             dispatch(rehide.handle(.transitionSettled))
             settleCatchUp()
+            if launchBaselineApplied { reconcileAnchor("conceal settled") }
             // Rapid hover out-in: if the pointer is back in the band by the
             // time this conceal lands, its entry edge is spent — re-arm the
             // hover reveal so the bar doesn't stay shut under the pointer.
@@ -424,8 +449,8 @@ final class AppState {
         bandMonitor.start()
         self.bandMonitor = bandMonitor
 
-        let clockRelay = ClockClickRelay { [weak self] point, pointer in
-            self?.clockClicked(at: point, pointer: pointer)
+        let clockRelay = ClockClickRelay { [weak self] point, pointer, option in
+            self?.clockClicked(at: point, pointer: pointer, option: option)
         }
         // The tap always runs (it is also the active-display observer);
         // the setting only decides whether a clock click is relayed.
@@ -499,6 +524,83 @@ final class AppState {
         }
         readAppleMenuBarSwitches()
         observeRunningApplications()
+        if let capture = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == MenuBarPolicy.screenCaptureUIID }) {
+            watchRecordingPill(capture)
+        }
+        watchChevronHosting()
+    }
+
+    /// The Stop Recording pill registers under the assertion and parks, and
+    /// comes and goes with no walk (`RecordingPill`): adopt it as the
+    /// recording starts, walk the bar as it shows or leaves.
+    private func watchRecordingPill(_ capture: NSRunningApplication) {
+        recordingPill.onRecordingStarted = { [weak self] in
+            guard let self else { return }
+            PelmetLog.log("recording: started, adopting the pill")
+            Task { await self.adoptRecordingPill() }
+        }
+        recordingPill.onIconsChanged = { [weak self] count in
+            PelmetLog.log("recording: pill \(count > 0 ? "up" : "gone"), walking")
+            Task {
+                _ = await self?.engine.freshSnapshot()
+                // The walk at the stop can land mid-teardown and still list it.
+                guard count == 0 else { return }
+                try? await Task.sleep(for: .seconds(1))
+                _ = await self?.engine.freshSnapshot()
+            }
+        }
+        recordingPill.onEnded = { [weak self] in
+            PelmetLog.log("recording: screencaptureui quit, walking")
+            Task { _ = await self?.engine.freshSnapshot() }
+        }
+        recordingPill.follow(capture)
+    }
+
+    private let recordingPill = RecordingPill()
+
+    /// The pill registers at the far left of the bar, every recording, and
+    /// no section holds it: it goes to the chevron end of Visible once, as
+    /// soon as it settles and the user's hands are off (2026-10-22), and a
+    /// held picture keeps it out of sight until it lands. One drag per
+    /// recording, no budget; off with "keep sections grouped", where it
+    /// stays put and in sight.
+    private func adoptRecordingPill() async {
+        let placing = SectionGrouper.isOn
+        transitions.placingSectionless = placing
+        defer { transitions.placingSectionless = false }
+        guard await coveringAdoption({ await engine.openAdoptionWindow(for: MenuBarPolicy.screenCaptureUIID) }) else { return }
+        updateSnapshot(await engine.snapshot())
+        if placing { await placeRecordingPill() }
+    }
+
+    private func placeRecordingPill() async {
+        let deadline = ContinuousClock.now + .seconds(10)
+        var waiting = "no walk at rest"
+        while ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(300))
+            let snap = await engine.freshSnapshot()
+            let pill = Set(ApplyPass.primaryFrames(snap, appState: self).keys.filter {
+                $0.bundleID == MenuBarPolicy.screenCaptureUIID
+            })
+            guard snap.itemsAtRest else { waiting = "no walk at rest"; continue }
+            guard !pill.isEmpty else { waiting = "no pill on the bar"; continue }
+            // The agent keeps the slot it was dragged to (its trailing
+            // positions, 2026-10-22): from the second recording on it comes
+            // up there.
+            guard !ApplyPass.plan(for: self, snapshot: snap, strays: pill).moves.isEmpty else {
+                PelmetLog.log("recording: pill already in Visible")
+                return
+            }
+            guard ApplyPass.secondsSinceAnyInput() >= AppTiming.applyIdleGap else { waiting = "input"; continue }
+            updateSnapshot(snap)
+            transitions.heldPassClicks = true
+            let report = await runGroupingPass(.strays(pill))
+            transitions.heldPassClicks = false
+            guard let report, !report.abandoned else { waiting = "input"; continue }
+            PelmetLog.log("recording: pill \(report.applied.isEmpty ? "not moved" : "moved to Visible")")
+            return
+        }
+        PelmetLog.log("recording: pill left where it is — 10s with \(waiting)")
     }
 
     /// One walk a second after the last time System Settings lost focus:
@@ -568,6 +670,17 @@ final class AppState {
     private var runningAppsObservation: NSKeyValueObservation?
     private var lastRelaunchQueue: [String: Date] = [:]
     private var siblingLaunchLogged: Set<String> = []
+    private var chevronHostObservers: [NSObjectProtocol] = []
+    private var chevronHostCheck: Task<Void, Never>?
+    /// When the chevron was last re-hosted, for `ChevronHosting.budget`.
+    private var chevronRehosts: [Date] = []
+    private var rehostingChevron = false
+    /// The last "not re-hosted" line, logged once per change.
+    private var chevronHostNote: String?
+    /// Debug: `open -a Dimble --args -pelmet.debug.forceChevronRehost YES`
+    /// re-hosts a chevron that's on the bar, once, at the next wake, unlock
+    /// or display change: the re-host path, on a Mac that never drops it.
+    private var debugForceChevronRehost = UserDefaults.standard.bool(forKey: "pelmet.debug.forceChevronRehost")
 
     /// Menu-bar agent apps (LSUIElement / background-only) post no launch
     /// notification — Snib, OpenClip and Sconce relaunched all afternoon
@@ -584,6 +697,9 @@ final class AppState {
             // list.
             let now = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
             Task { [engine = self?.engine] in await engine?.setRunningBundles(now) }
+            if let capture = (change.newValue ?? []).first(where: { $0.bundleIdentifier == MenuBarPolicy.screenCaptureUIID }) {
+                Task { @MainActor [weak self] in self?.watchRecordingPill(capture) }
+            }
             let quit = before.subtracting(now)
             if !quit.isEmpty { Task { @MainActor [weak self] in self?.appsQuit(quit) } }
             let appeared = (change.newValue ?? [])
@@ -738,6 +854,141 @@ final class AppState {
         }
     }
 
+    /// A lid closed on external displays and opened on the built-in alone
+    /// left the chevron on no bar until a relaunch (#26, cpierce). Each
+    /// wake, unlock or display change looks again once the bar settles.
+    private func watchChevronHosting() {
+        let workspace = NSWorkspace.shared.notificationCenter
+        for (name, why) in [(NSWorkspace.didWakeNotification, "wake"),
+                            (NSWorkspace.screensDidWakeNotification, "displays woke")] {
+            chevronHostObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.scheduleChevronHostCheck(why)
+                    self?.scheduleAnchorCheck(why)
+                }
+            })
+        }
+        chevronHostObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.transitions.dropHeldBars("display change")
+                self?.chevronDisplaysChanged()
+                self?.scheduleChevronHostCheck("display change")
+                self?.scheduleAnchorCheck("display change")
+            }
+        })
+        chevronHostObservers.append(DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.scheduleChevronHostCheck("screen unlocked")
+                self?.scheduleAnchorCheck("screen unlocked")
+            }
+        })
+        // The chevron's window loses `.visible` the moment macOS puts it
+        // behind the «, and gets it back when there's room (#81).
+        chevronHostObservers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let window = (note.object as AnyObject?).map(ObjectIdentifier.init)
+            MainActor.assumeIsolated {
+                guard let self, let window, window == self.statusItem?.buttonWindow.map(ObjectIdentifier.init) else { return }
+                self.checkChevronTrap()
+            }
+        })
+    }
+
+    /// Displays come and go in a burst: once they have settled, the bar is
+    /// anchored for a display that shows all icons or not, and the held
+    /// pictures go back up at the new geometry.
+    @ObservationIgnored private var anchorCheck: Task<Void, Never>?
+    private func scheduleAnchorCheck(_ why: String) {
+        anchorCheck?.cancel()
+        anchorCheck = Task { [weak self] in
+            try? await Task.sleep(for: AppTiming.chevronHostCheckDelay)
+            guard !Task.isCancelled, let self, self.launchBaselineApplied else { return }
+            self.reconcileAnchor(why)
+            self.transitions.refreshHeld(why)
+        }
+    }
+
+    /// The last event wins: a wake, a display change and an unlock come in
+    /// a burst, and only the settled bar is worth a look.
+    private func scheduleChevronHostCheck(_ why: String) {
+        chevronHostCheck?.cancel()
+        chevronHostCheck = Task { [weak self] in
+            try? await Task.sleep(for: AppTiming.chevronHostCheckDelay)
+            guard !Task.isCancelled, let self else { return }
+            await self.checkChevronHosted(after: why)
+        }
+    }
+
+    private func chevronHostingVerdict() async -> (verdict: ChevronHosting.Verdict, detail: String) {
+        let snap = await engine.snapshot()
+        let drawn = statusItem?.windowFrame
+        chevronRehosts.removeAll { Date.now.timeIntervalSince($0) > ChevronHosting.budgetWindow }
+        let verdict = ChevronHosting.verdict(
+            drawn: drawn, screens: NSScreen.screens.map(\.frame), walkedItems: snap.items.count,
+            walkedChevron: pelmetChevronItem(in: snap) != nil, recentRehosts: chevronRehosts.count
+        )
+        let window = drawn.map { "window at x=\(Int($0.minX)) y=\(Int($0.minY))" } ?? "no window"
+        return (verdict, "\(window), walk \(snap.items.count) item(s), \(NSScreen.screens.count) display(s)")
+    }
+
+    private func checkChevronHosted(after why: String) async {
+        guard settings.showStatusItem, statusItem != nil, engineStarted, !rehostingChevron else { return }
+        guard !barInFlux else {
+            scheduleChevronHostCheck(why)
+            return
+        }
+        var (verdict, detail) = await chevronHostingVerdict()
+        if verdict == .rehost {
+            // Once more after a beat: the agent may still be re-hosting it.
+            PelmetLog.log("chevron: not on any bar after \(why) (\(detail)) — looking once more")
+            try? await Task.sleep(for: AppTiming.chevronHostConfirmDelay)
+            guard !Task.isCancelled, settings.showStatusItem, statusItem != nil, !rehostingChevron else { return }
+            (verdict, detail) = await chevronHostingVerdict()
+        }
+        if verdict == .hosted, debugForceChevronRehost {
+            debugForceChevronRehost = false
+            verdict = .rehost
+            detail += ", forced by pelmet.debug.forceChevronRehost"
+        }
+        switch verdict {
+        case .hosted:
+            if chevronHostNote != nil { PelmetLog.log("chevron: on the bar again after \(why) (\(detail))") }
+            chevronHostNote = nil
+        case .wait(let reason):
+            let note = "chevron: not on any bar after \(why), not re-hosted: \(reason)"
+            if note != chevronHostNote { PelmetLog.log("\(note) (\(detail))") }
+            chevronHostNote = note
+        case .rehost:
+            // Its own task: a later event cancels the check, and a cancelled
+            // sleep inside the adoption window would spin its walks.
+            Task { [weak self] in await self?.rehostChevron(after: why, detail: detail) }
+        }
+    }
+
+    /// What a relaunch does for the chevron, without the relaunch: a fresh
+    /// registration, then an adoption window, since the agent parks an item
+    /// registered under the assertion (`bootEngine`).
+    private func rehostChevron(after why: String, detail: String) async {
+        guard !rehostingChevron, settings.showStatusItem, statusItem != nil else { return }
+        rehostingChevron = true
+        defer { rehostingChevron = false }
+        chevronRehosts.append(.now)
+        PelmetLog.log("chevron: still not on any bar after \(why) (\(detail)) — re-hosting (\(chevronRehosts.count)/\(ChevronHosting.budget))")
+        statusItem?.remove()
+        statusItem = PelmetStatusItem(appState: self)
+        statusItem?.updateSymbol(revealed: isRevealedOrRevealing)
+        _ = await coveringAdoption { await engine.openAdoptionWindow(for: PelmetBundle.mainID, expecting: Self.chevronItemID) }
+        updateSnapshot(await engine.snapshot())
+        let after = await chevronHostingVerdict()
+        chevronHostNote = after.verdict == .hosted ? nil : "re-hosted, still off"
+        PelmetLog.log("chevron: re-hosted — \(after.verdict == .hosted ? "on the bar" : "still not on any bar") (\(after.detail))")
+    }
+
     private func startEngineEventPump() {
         eventTask = Task { [weak self] in
             guard let events = self?.engine.events else { return }
@@ -801,7 +1052,9 @@ final class AppState {
             // crossings, and on its first sighting only from here on, so the
             // display Pelmet launches under gets its policy applied here
             // (queued behind the conceal's settle).
-            if pointerDisplayBehavior == .alwaysShowAll {
+            if revealAnchored {
+                reconcileAnchor("launch")
+            } else if pointerDisplayBehavior == .alwaysShowAll {
                 reveal([.hidden], reason: .displayPolicy)
             }
             bandMonitor?.seedPointerDisplay()
@@ -871,6 +1124,16 @@ final class AppState {
     // MARK: - Intents (UI + monitors call these)
 
     func toggle(reason: RevealReason, sections: Set<PelmetCore.Section> = [.hidden]) {
+        // A chevron click on a display that shows all icons opens Always
+        // Hidden there, in that display's "Show hidden icons in" (#96). A plain toggle
+        // asked for nothing when anchored, and closed the icons that display
+        // shows when the pointer's display decided.
+        if RevealRouting.clickWidensToAlwaysHidden(reason, sections: sections, behavior: pointerDisplayBehavior) {
+            PelmetLog.log("toggle(\(reason)) on a display that shows all icons — Always Hidden too")
+            toggleAll(reason: reason)
+            return
+        }
+        if anchoredShowAllAsksNothing(sections, reason) { return }
         PerfTrace.markTrigger("\(reason)")
         // A click landing in the first moments of a hover reveal: the
         // pointer reached the chevron, the hover fired ~100ms later, and
@@ -906,13 +1169,23 @@ final class AppState {
         }
     }
 
+    /// Anchored, a display that shows all icons has them out already: a
+    /// hover or a click on its bar asks for nothing.
+    private func anchoredShowAllAsksNothing(_ sections: Set<PelmetCore.Section>, _ reason: RevealReason) -> Bool {
+        guard transitions.anchored, case .concealed = rehide.state, RevealRouting.startsAtBar(reason),
+              sections.isSubset(of: transitions.anchoredSections),
+              pointerDisplayBehavior == .alwaysShowAll else { return false }
+        return true
+    }
+
     func reveal(_ sections: Set<PelmetCore.Section>, reason: RevealReason) {
+        if anchoredShowAllAsksNothing(sections, reason) { return }
         PerfTrace.markTrigger("\(reason)")
         // The panel is up and this needs the real bar (⌘↩ in Search, an
         // Apply): the panel closes first and the reveal queues behind it. A
         // request for the panel's own sections would otherwise change
         // nothing, and the bar would never come out.
-        if panelShowsReveal, case .revealed = rehide.state, presenter(for: reason) !== panelPresenter {
+        if panelShowsReveal, case .revealed = rehide.state, RevealRouting.needsBar(reason) {
             dispatch(rehide.handle(.concealRequested))
         }
         dispatch(rehide.handle(.revealRequested(sections, reason)))
@@ -924,6 +1197,28 @@ final class AppState {
     /// include it instead of closing: the key asked for more, not less.
     func toggleAll(reason: RevealReason) {
         let all: Set<PelmetCore.Section> = [.hidden, .alwaysHidden]
+        // Off the anchor (no Screen Recording), a display that shows all
+        // icons has its Hidden out as the policy's own bar reveal (#96). A
+        // click there that follows a panel or a row takes that reveal down
+        // and opens there: widening the bar ignored the setting until a
+        // third click. Closing Always Hidden goes back to the policy's
+        // reveal, not to an empty bar.
+        if !transitions.anchored, pointerDisplayBehavior == .alwaysShowAll, revealPresenter === barPresenter,
+           case .revealed(let current, let by) = rehide.state {
+            let target = revealDecision(for: reason).target
+            if by == .displayPolicy, !current.contains(.alwaysHidden),
+               RevealRouting.destination(for: reason, target: target) == .panel {
+                PelmetLog.log("toggleAll(\(reason)) off the anchor — the policy's bar goes, \(target.rawValue) opens")
+                concealNow()
+                reveal(all, reason: reason)
+                return
+            }
+            if current.contains(.alwaysHidden), current.contains(.hidden) {
+                dispatch(rehide.handle(.narrowRequested([.hidden], .displayPolicy)))
+                PelmetLog.log("toggleAll(\(reason)) off the anchor — narrowed to the policy's reveal, state=\(rehide.state)")
+                return
+            }
+        }
         let showing: Set<PelmetCore.Section>? = {
             switch rehide.state {
             case .revealed(let sections, _): sections
@@ -1381,7 +1676,10 @@ final class AppState {
     /// settle later (see `StatusItemFader.attach`).
     /// Apply pass: idle extras join the layout invisibly so they can be
     /// dragged (ExtrasManager.attachForApply). Returns what joined.
-    func attachIdleExtrasForApply() -> [ItemID] { extras?.attachForApply() ?? [] }
+    func attachIdleExtrasForApply() -> [ItemID] {
+        let edits = settings.orderEdits
+        return extras?.attachForApply(touched: { edits.touches($0.sectionKey) }) ?? []
+    }
     func detachIdleExtrasAfterApply() { extras?.detachAfterApply() }
 
     func preattachOwnItems(revealing sections: Set<PelmetCore.Section>) async {
@@ -1440,6 +1738,7 @@ final class AppState {
         guard granted != screenRecordingGranted else { return }
         screenRecordingGranted = granted
         PelmetLog.log("screen: recording granted=\(granted)")
+        if launchBaselineApplied { reconcileAnchor("screen recording \(granted ? "granted" : "lost")") }
     }
 
     /// Grant arrived: the engine's walks were empty until now, and the clock
@@ -1526,7 +1825,7 @@ final class AppState {
     /// panel (#52, #53: covers stacked six deep under a held shortcut).
     private var clockBlinkInFlight = false
 
-    private func clockClicked(at point: CGPoint, pointer: CGPoint, viaShortcut: Bool = false) {
+    private func clockClicked(at point: CGPoint, pointer: CGPoint, option: Bool = false, viaShortcut: Bool = false) {
         Task { @MainActor in
             // Press the clock through AX so the pointer never moves; the
             // click is the fallback. Dot-zone clicks pressed since
@@ -1541,21 +1840,37 @@ final class AppState {
             // where it clicked (a hand that had left was pulled back to the
             // clock). A close may land in the dot zone too, an open needs
             // the clock itself.
+            // A ⌥-click goes out with its ⌥ (#92).
+            let flags: CGEventFlags = option ? .maskAlternate : []
             let replayClick = { [clockRelay] (closing: Bool) in
                 let live = CGEvent(source: nil)?.location
                 if let live, clockRelay?.isOnClock(live, dotZoneIncluded: closing) == true {
-                    ClockClickRelay.postClick(at: live, pointer: live)
+                    ClockClickRelay.postClick(at: live, pointer: live, flags: flags)
                 } else {
-                    ClockClickRelay.postClick(at: point, pointer: live ?? pointer)
+                    ClockClickRelay.postClick(at: point, pointer: live ?? pointer, flags: flags)
                 }
+            }
+            // No clock under the target and another bar item under the
+            // click: the zone outlived the clock's spot and took a
+            // neighbour's click, Control Center reflowed into a hidden
+            // clock's place (#93). Its click goes back as it was, with no
+            // blink: a drop with no clock to press and no cover flashed
+            // every hidden icon by.
+            if clockElement == nil, !viaShortcut, let other = ClockClickRelay.otherBarItem(at: pointer) {
+                await ClockClickRelay.waitForButtonRelease()
+                let live = CGEvent(source: nil)?.location ?? pointer
+                ClockClickRelay.postClick(at: pointer, pointer: live, flags: flags)
+                PelmetLog.log("clock: click landed on \(other), not the clock — replayed as is, no blink")
+                return
             }
             // Closing needs no blink: the panel dismisses itself on a click
             // outside it, and the assertion only refuses the clock's OWN
             // action. A plain replay of the click, no cover, no picture,
             // nothing for the panel's shade to disagree with (#51; live
             // 2026-09-22 15:33, 3/3). Opening stays a blink: with the
-            // assertion held the clock's click is refused (probed 0/2).
-            if panelWasOpen {
+            // assertion held the clock's click is refused (probed 0/2). So
+            // does a ⌥-click, the clock's own action whatever the panel does.
+            if panelWasOpen, !option {
                 await ClockClickRelay.waitForButtonRelease()
                 replayClick(true)
                 panelOpenedAt = .distantPast
@@ -1592,7 +1907,7 @@ final class AppState {
                 PelmetLog.log("clock: waits for the picture pass")
                 await transitions.awaitPicturePass()
             }
-            panelOpenedAt = Date()
+            if !option { panelOpenedAt = Date() }
             let cover = await transitions.beginBarCover()
             // The physical click is swallowed, so the panel starts sliding
             // at Pelmet's own press and is in ~100ms later; from then on
@@ -1606,7 +1921,18 @@ final class AppState {
                 }
             }
             var blinked = await engine.beginClockBlink()
-            if ClockClickRelay.pressNeverOpensPanel {
+            // When the press, not a replayed click, brought the panel up.
+            var pressOpenedAt: Date?
+            if option {
+                // ⌥-click toggles Do Not Disturb (#92), refused while the
+                // assertion is held like the plain click. The click goes
+                // out with its ⌥ once the drop is in: no AX press (it
+                // carries no modifiers) and no panel to wait for.
+                await ClockClickRelay.waitForButtonRelease()
+                try? await Task.sleep(for: AppTiming.clockPressSettle)
+                replayClick(false)
+                PelmetLog.log("clock: ⌥-click replayed\(blinked ? " with the assertion down" : "")")
+            } else if ClockClickRelay.pressNeverOpensPanel {
                 // This macOS never keeps the panel open on a press: replay
                 // the click, once the button is up (the cover is often up
                 // before the finger is, since the idle picture). The
@@ -1688,6 +2014,7 @@ final class AppState {
                     if cleanMisses > 0 { ClockClickRelay.notePressNeverOpensPanel() }
                     replayClick(false); panelStarting()
                 }
+                if opened { pressOpenedAt = pressedAt }
             } else {
                 PelmetLog.log("clock: no clock element under the target, replaying the click")
                 replayClick(false)
@@ -1697,6 +2024,26 @@ final class AppState {
             try? await Task.sleep(for: AppTiming.clockBlinkReacquire)
             await engine.endClockBlink()
             if let cover { transitions.endBarCover(cover) }
+            // A panel the press opened must outlive the re-acquire too. On
+            // 27.2 macOS can close it once the assertion is back, and a
+            // build marked as holding never looked again, so every click
+            // flashed the panel (#94). Gone with no input since counts like
+            // a panel that left during the hold, and the second one turns
+            // the build to replayed clicks. Its own task, so a click right
+            // after isn't taken for one in flight.
+            if let pressOpenedAt {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(AppTiming.clockPressHold))
+                    if ClockClickRelay.notificationCenterIsOpen() {
+                        PelmetLog.log("clock: panel still up after the re-acquire")
+                    } else if ClockClickRelay.userInput(since: pressOpenedAt) {
+                        PelmetLog.log("clock: panel closed by the user after the re-acquire — not counted")
+                    } else {
+                        PelmetLog.log("clock: the panel left on its own after the re-acquire")
+                        ClockClickRelay.notePanelLeftAfterPress()
+                    }
+                }
+            }
         }
     }
 
@@ -1929,10 +2276,28 @@ final class AppState {
     /// conceal here collapsed the bar even on "always show everything"
     /// displays.
     func applyPointerDisplayPolicyAfterDismissal() {
-        if pointerDisplayBehavior == .alwaysShowAll {
+        if !transitions.anchored, pointerDisplayBehavior == .alwaysShowAll {
             reveal([.hidden], reason: .displayPolicy)
         } else {
             concealNow()
+        }
+    }
+
+    /// The panel closed with the pointer on a display that shows all icons,
+    /// off the anchor: its Hidden comes back out on the bar, the policy's
+    /// own reveal (#96). Nothing else brings it back before the next display
+    /// crossing. Deferred, since this runs inside `dispatch`.
+    private func restoreShowAllPolicyAfterPanel() {
+        guard !transitions.anchored, pointerDisplayBehavior == .alwaysShowAll else { return }
+        Task { @MainActor [weak self] in
+            guard let self, !self.transitions.anchored, self.pointerDisplayBehavior == .alwaysShowAll else { return }
+            switch self.rehide.state {
+            case .concealed, .transitioning(target: .conceal, queued: nil):
+                PelmetLog.log("displays: panel closed on a display that shows all icons — back to the policy's reveal")
+                self.reveal([.hidden], reason: .displayPolicy)
+            default:
+                break
+            }
         }
     }
 
@@ -1948,14 +2313,14 @@ final class AppState {
     /// Sound" and let a settle check see neither bar (live test,
     /// 2026-10-13). Anything else still conceals and re-reveals.
     func restoreDisplayPolicyAfterPass() {
-        if pointerDisplayBehavior == .alwaysShowAll, revealPresenter === barPresenter,
+        if !transitions.anchored, pointerDisplayBehavior == .alwaysShowAll, revealPresenter === barPresenter,
            case .revealed(let current, _) = rehide.state, current.contains(.hidden), current.count > 1 {
             dispatch(rehide.handle(.narrowRequested([.hidden], .displayPolicy)))
             PelmetLog.log("displays: pass over — narrowed to the policy's reveal, state=\(rehide.state)")
             return
         }
         concealNow()
-        guard pointerDisplayBehavior == .alwaysShowAll else { return }
+        guard !transitions.anchored, pointerDisplayBehavior == .alwaysShowAll else { return }
         reveal([.hidden], reason: .displayPolicy)
         PelmetLog.log("displays: pass over — back to the policy's reveal, state=\(rehide.state)")
     }
@@ -1966,7 +2331,10 @@ final class AppState {
     /// side lands on window close or the next display crossing.
     func displayBehaviorEdited() {
         PelmetLog.log("displays: behavior edited, pointer display=\(pointerDisplayBehavior)")
-        if pointerDisplayBehavior == .alwaysShowAll {
+        if revealAnchored || transitions.anchored {
+            reconcileAnchor("behavior edited")
+            transitions.refreshHeld("behavior edited")
+        } else if pointerDisplayBehavior == .alwaysShowAll {
             reveal([.hidden], reason: .displayPolicy)
         }
     }
@@ -2541,8 +2909,19 @@ final class AppState {
     private(set) var applying = false
     private(set) var applyReport: ApplyReport?
 
-    /// Moves the bar needs to match the editor as it stands: drawn edits
-    /// plus any icon on the wrong side of the chevron (0 with nothing on
+    /// The editor owns the order (vault plan "Dimble editor owns the bar
+    /// order", 2026-10-20): every section's stored order is what the bar
+    /// should read. A drop writes its drawing there at once, so a pending
+    /// drawing is in it too.
+    var editorOrderTarget: OrderEdits {
+        var target = settings.orderEdits
+        target.order = settings.sectionModel.order
+        return target
+    }
+
+    /// Moves the bar needs to match the editor as it stands: every
+    /// section's stored order (`editorOrderTarget`), so drawn edits, drift
+    /// and any icon on the wrong side of the chevron (0 with nothing on
     /// screen to move).
     var pendingMoveCount: Int {
         guard let snapshot else { return 0 }
@@ -2663,6 +3042,116 @@ final class AppState {
 
     /// Apply pass: separators drawn in another section move host now.
     func rehostSeparatorsForApply() -> Bool { separators?.rehostToModel() ?? false }
+    /// A separator is hosted for another section than the editor's: only
+    /// Apply re-hosts it, so the order keeper leaves separators alone.
+    var separatorsNeedRehost: Bool { separators?.needsRehost ?? false }
+
+    /// The primary bar as live frames read it, for what writes the stored
+    /// order (M4, M5). Never a remembered frame: a stale or phantom one
+    /// written there is kept for good, and the keeper drags the bar to it
+    /// (review, 2026-10-20). A walk at rest only. Nothing behind the «,
+    /// nothing out on its own beside the chevron, nothing just concealed
+    /// (still listed on a phantom frame), no own extra leaving a concealed
+    /// section.
+    private func liveBarForOrder(_ snap: EngineSnapshot) -> [ItemID] {
+        guard snap.itemsAtRest else { return [] }
+        let roster = settings.sectionModel.roster
+        let revealed = revealedSectionsForExtras
+        let away = ApplyPass.trapped(snap, appState: self)
+            .union(snap.shownAlone.map(\.sectionKey))
+            .union(snap.concealed.map(\.sectionKey))
+        let frames = ApplyPass.primaryFrames(snap, appState: self).filter { key, _ in
+            guard !away.contains(key) else { return false }
+            guard MenuBarPolicy.isPelmetExtraID(key) else { return true }
+            let section = roster.section(of: key)
+            return section == .visible || revealed.contains(section)
+        }
+        return ApplyPass.barOrder(frames)
+    }
+
+    /// M4 of the editor-owns-order plan: an icon its section's stored order
+    /// doesn't list yet (a new app's) is listed where it sits among live
+    /// neighbours, so the order keeper never drags a newcomer. One that is
+    /// concealed waits for a reveal (the keeper leaves unlisted icons
+    /// alone meanwhile). Strays wait for the grouper to bring them over,
+    /// and own items are enrolled where they are made.
+    @discardableResult
+    func slotUnlistedIcons(_ snap: EngineSnapshot, skipping strays: Set<ItemID>) -> [ItemID] {
+        let bar = liveBarForOrder(snap)
+        let exempt = Set(bar.filter { id in
+            strays.contains(id) || !MenuBarPolicy.isSectionManageable(id)
+                || id.bundleID.map(PelmetBundle.ownIDs.contains) == true
+        })
+        var model = settings.sectionModel
+        let chevron = pelmetChevronItem(in: snap)?.id.sectionKey
+        let slotted = model.slotUnlisted(bar: bar, chevron: chevron, exempt: exempt)
+        guard !slotted.isEmpty else { return [] }
+        settings.sectionModel = model
+        settings.save()
+        PelmetLog.log("order: slotted [\(slotted.map(\.rawValue).joined(separator: ", "))] where they landed")
+        return slotted
+    }
+
+    private static let seededOrderKey = "pelmet.seededOrderFromBar"
+    private static let seedPassLimit = 2
+    private var seedPasses = 0
+
+    /// Sections whose stored order hasn't been taken from the bar since the
+    /// editor came to own the order (M5).
+    var unseededOrderSections: Set<PelmetCore.Section> {
+        let stored = UserDefaults.standard.stringArray(forKey: Self.seededOrderKey) ?? []
+        return Set(PelmetCore.Section.allCases).subtracting(stored.compactMap(PelmetCore.Section.init(rawValue:)))
+    }
+
+    /// M5 of the editor-owns-order plan: until this update the bar's order
+    /// was the truth and the stored one could lag it, so the first drift
+    /// the keeper sees is the bar the user had, not drift. The keeper's
+    /// seed pass (`ApplyPass.Scope.seedOrder`) reveals the bar and hands
+    /// the live snapshot here: each section's stored order takes the bar's
+    /// (`foldBarOrder`), once. Every section seen is marked, drifted or
+    /// not, or one that matched at the update would lose its order to its
+    /// first real drift days later. A section the read missed (a walk not
+    /// at rest, a member still concealed: the reveal didn't take) waits for
+    /// the next seed pass, and is marked as it is after `seedPassLimit`
+    /// passes in a launch, or every cooldown would reveal the bar again
+    /// (review). A section with a drawing waiting for Apply is the user's
+    /// target already: marked, not seeded.
+    func seedOrderFromBar(_ sections: Set<PelmetCore.Section>, snap: EngineSnapshot) {
+        seedPasses += 1
+        let bar = liveBarForOrder(snap)
+        let roster = settings.sectionModel.roster
+        let concealed = Set(snap.concealed.map(\.sectionKey))
+        var model = settings.sectionModel
+        var changed = false
+        var read = Set<PelmetCore.Section>()
+        for section in PelmetCore.Section.allCases where sections.contains(section) {
+            let hiddenStill = concealed.filter { roster.section(of: $0) == section }.count
+            guard snap.itemsAtRest, hiddenStill == 0 else {
+                let why = snap.itemsAtRest ? "\(hiddenStill) icon(s) concealed" : "bar not at rest"
+                if seedPasses < Self.seedPassLimit {
+                    PelmetLog.log("order: \(section.rawValue) not read (\(why)) — seeded at the next look")
+                    continue
+                }
+                PelmetLog.log("order: \(section.rawValue) not read (\(why)) after \(seedPasses) looks — kept as stored")
+                read.insert(section)
+                continue
+            }
+            read.insert(section)
+            if settings.orderEdits.order[section] != nil {
+                PelmetLog.log("order: \(section.rawValue) has a drawing — not seeded")
+            } else {
+                let folded = model.foldBarOrder(of: section, bar: bar)
+                changed = changed || folded
+                PelmetLog.log("order: seeded \(section.rawValue) from the bar\(folded ? "" : " (already in order)")")
+            }
+        }
+        let marked = Set(PelmetCore.Section.allCases).subtracting(unseededOrderSections).union(read)
+        UserDefaults.standard.set(marked.map(\.rawValue).sorted(), forKey: Self.seededOrderKey)
+        if changed {
+            settings.sectionModel = model
+            settings.save()
+        }
+    }
 
     /// The Apply button: reveal what needs measuring, plan, drag each move
     /// through the one shielded door, verify, report. Failed moves keep the
@@ -2845,13 +3334,13 @@ final class AppState {
             || (session[kCGSessionOnConsoleKey as String] as? Bool) == false
     }
 
-    /// One pass for `allowed` (the strays Pelmet can explain), through the
-    /// Apply door. nil when an Apply pass already has the bar. Never touches
-    /// `orderEdits` or the button's report: what the user drew stays pending
-    /// for the button. The drags make the dragged icon's app frontmost (only
-    /// Settings is refocused by the pass), so whoever had focus gets it back.
-    func runGroupingPass(allowing allowed: Set<ItemID>) async -> ApplyReport? {
-        guard !applying else { return nil }
+    /// One automatic pass (`.strays` for the strays Pelmet can explain,
+    /// `.drift` for the keeper's), through the Apply door. nil when an Apply
+    /// pass already has the bar. Never touches the button's report. The
+    /// drags make the dragged icon's app frontmost (only Settings is
+    /// refocused by the pass), so whoever had focus gets it back.
+    func runGroupingPass(_ scope: ApplyPass.Scope) async -> ApplyReport? {
+        guard scope.isAutomatic, !applying else { return nil }
         applying = true
         // The walk at rest skips its prune while the pass holds the bar
         // (restoreFocus runs up to ~550ms), and it is the only one after a
@@ -2859,7 +3348,7 @@ final class AppState {
         // transition with Apply lit (review, 2026-10-13).
         defer { applying = false; pruneSettledOrderEdits() }
         let front = NSWorkspace.shared.frontmostApplication
-        let report = await ApplyPass.run(appState: self, scope: .strays(allowed))
+        let report = await ApplyPass.run(appState: self, scope: scope)
         if !report.applied.isEmpty { await engine.writeOrderHint() }
         satisfyDrawnEdits(for: report.applied)
         if let front, !report.abandoned, front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
@@ -3018,47 +3507,6 @@ final class AppState {
         PelmetLog.log("apply: \(dropped) pending edit(s) for removed own item(s) dropped")
     }
 
-    /// Drops the pending edits; the editor goes back to drawing the bar's
-    /// real order for those sections.
-    func discardOrderEdits() {
-        guard !applying else { return }
-        var model = settings.sectionModel
-        // Discard is a reset of the drawing: every edited section goes back
-        // to the order it had before its first edit (reading the bar could
-        // not serve a concealed section, and put a returning icon at the
-        // end instead of its old slot, 2026-09-21), and every
-        // between-section drop goes back to its section — a separator drawn
-        // elsewhere returns to the one hosting it (Apply moves hosts).
-        for (section, order) in settings.orderEdits.previousOrder {
-            model.order[section] = order
-        }
-        for (key, origin) in settings.orderEdits.previousSection {
-            if origin == .visible {
-                model.assignments.removeValue(forKey: key)
-            } else {
-                model.assignments[key] = origin
-            }
-        }
-        // A separator created in this edit set was never in the bar's
-        // order: it goes, tile and item alike.
-        let created = settings.orderEdits.created
-        if !created.isEmpty {
-            settings.separators.removeAll { created.contains(SeparatorManager.itemID(for: $0).sectionKey) }
-            for key in created {
-                model.assignments.removeValue(forKey: key)
-                for section in model.order.keys { model.order[section]?.removeAll { $0 == key } }
-            }
-            PelmetLog.log("editor: \(created.count) created separator(s) discarded")
-        }
-        settings.sectionModel = model
-        settings.orderEdits = OrderEdits()
-        applyReport = nil
-        settings.save()
-        separators?.sync(with: settings.separators)
-        PelmetLog.log("apply: edits discarded")
-        Task { await engine.setModel(model) }
-    }
-
     /// The icon's physical side disagrees with its section (an editor drop
     /// between sections hides it at once but leaves it where it was): the
     /// tile says so until Apply relocates it. Needs the chevron
@@ -3188,17 +3636,21 @@ final class AppState {
     /// What is revealed ON THE BAR. A reveal the panel draws leaves the bar
     /// concealed, so Pelmet's own items, covers and pictures stay put.
     var currentRevealedSections: Set<PelmetCore.Section> {
+        // Anchored, Hidden is out on the bar whatever the machine says.
+        let anchored = transitions.anchored ? transitions.anchoredSections : []
+        // A pass says exactly what is out (it adds the anchor itself, and
+        // its rounds put every section away).
         if let picturePassSections { return picturePassSections }
-        guard !panelShowsReveal else { return [] }
+        guard !panelShowsReveal else { return anchored }
         switch rehide.state {
         case .revealed(let sections, _):
-            return sections
+            return sections.union(anchored)
         case .transitioning(target: .reveal(let sections, _), _):
             // Track the transition's destination so Pelmet-owned items appear
             // in the same swap as the assertion-managed ones.
-            return sections
+            return sections.union(anchored)
         default:
-            return []
+            return anchored
         }
     }
 
@@ -3226,15 +3678,34 @@ final class AppState {
                 if case .transitioning(target: .reveal(_, let r), _) = rehide.state { reason = r }
                 if reason == .hover { hoverRevealStartedAt = .now }
                 let trace = PerfTrace(kind: "reveal", reason: reason)
-                var presenter = presenter(for: reason)
+                let decision = revealDecision(for: reason)
+                var presenter = reason.map { RevealRouting.destination(for: $0, target: decision.target) } == .panel
+                    ? panelPresenter as any RevealPresenter : barPresenter
                 if revealPresenter === barPresenter {
                     // The bar is out already: a wider reveal widens it there.
                     presenter = barPresenter
-                } else if panelShowsReveal, presenter !== panelPresenter {
+                } else if panelShowsReveal, !RevealRouting.needsBar(reason) {
+                    // The panel is up: it takes the wider reveal, wherever
+                    // the pointer has gone since.
+                    presenter = panelPresenter
+                } else if panelShowsReveal {
                     // Something that needs the real bar (⌘↩ in Search, an
                     // Apply) while the panel is up: the panel goes, the
                     // bar takes the reveal.
                     panelPresenter.dismiss()
+                }
+                if presenter !== revealPresenter {
+                    revealDecision = RevealDecision(
+                        display: decision.display, uuid: decision.uuid,
+                        target: presenter === barPresenter ? .menuBar : decision.target,
+                        followsChoice: !RevealRouting.needsBar(reason),
+                        holdsOthers: !RevealRouting.needsBar(reason) || reason == .displayPolicy)
+                    PelmetLog.log("reveal: \(presenter === barPresenter ? "bar" : decision.target.rawValue) from display \(decision.display.map(String.init) ?? "?") (\(reason.map { "\($0)" } ?? "no reason"))")
+                } else if RevealRouting.needsBar(reason) {
+                    // The editor or an Apply widens a bar a hover brought
+                    // out: every bar shows it now (barsKeptConcealed).
+                    revealDecision?.followsChoice = false
+                    if reason != .displayPolicy { revealDecision?.holdsOthers = false }
                 }
                 revealPresenter = presenter
                 presenter.reveal(sections, reason: reason, trace: trace)
@@ -3255,6 +3726,7 @@ final class AppState {
                 // is where the engine's conceal lands.
                 let shown = revealPresenter
                 revealPresenter = nil
+                revealDecision = nil
                 if shown == nil, !items.isEmpty {
                     transitions.performItemsConceal(items, settles: true, trace: trace)
                 } else if let shown, shown !== barPresenter {
@@ -3265,6 +3737,7 @@ final class AppState {
                 } else {
                     transitions.performConceal(trace: trace, releasing: items)
                 }
+                if shown === panelPresenter { restoreShowAllPolicyAfterPanel() }
             case .armTimer(let deadline):
                 rehideDeferLogged = false
                 scheduleRehideTimer(at: deadline)
@@ -3275,22 +3748,114 @@ final class AppState {
         }
     }
 
-    /// Where a reveal gets drawn. No reason found for the transition goes to
-    /// the bar, as every reveal did before the setting existed.
-    private func presenter(for reason: RevealReason?) -> any RevealPresenter {
-        guard let reason else { return barPresenter }
-        switch RevealRouting.destination(for: reason, target: revealTarget) {
-        case .bar:
-            return barPresenter
-        case .panel:
-            return panelPresenter
-        }
+    /// Which display a reveal for `reason` follows and what that display
+    /// picked (#88). The rule (`RevealRouting.decidingDisplay`) is the
+    /// panel's too, so it opens where this was decided.
+    func revealDecision(for reason: RevealReason?) -> RevealDecision {
+        let screen = decidingScreen(atBar: reason.map(RevealRouting.startsAtBar) ?? false)
+        let uuid = screen?.displayUUIDString
+        return RevealDecision(display: screen?.directDisplayID, uuid: uuid, target: settings.revealTarget(forDisplayUUID: uuid))
     }
 
-    /// "Show hidden icons in". The build-time override
+    /// The display under the pointer; off a bar's reveal, only while a bar
+    /// is drawn there (the Window Server's, as `GlassPanel` reads it), then
+    /// the active display's, then the primary (the first screen, never
+    /// NSScreen.main: that is the key window's).
+    func decidingScreen(atBar: Bool) -> NSScreen? {
+        let screens = NSScreen.screens
+        guard screens.count > 1 else { return screens.first }
+        let active = lastMouseDownDisplay.flatMap { id in screens.first { $0.directDisplayID == id } }
+        return RevealRouting.decidingDisplay(
+            atBar: atBar, pointer: NSScreen.underPointer, active: active, primary: screens.first
+        ) { GlassPanel.drawnBarHeight(of: $0, fresh: true) != nil }
+    }
+
+    /// "Show hidden icons in" on the Panel tab: every display without a
+    /// choice of its own follows it. The build-time override
     /// (`pelmet.debug.panel`) is gone: left set, it beat the setting
     /// (review SIMP-7).
     var revealTarget: RevealTarget { settings.hiddenIconsIn }
+
+    /// The bars kept looking concealed (#88): macOS draws one set of icons
+    /// on every bar, so a display that hides icons wears the empty picture
+    /// of its hidden run while they are out for another display — a bar
+    /// reveal elsewhere, or the bar anchored out for a display that shows
+    /// all. A reveal on the display itself lifts its own. Apply and the
+    /// editor keep every bar.
+    var barsKeptConcealed: Set<CGDirectDisplayID> {
+        var windows: [[String: Any]]?
+        return barsKeptConcealed(windows: &windows)
+    }
+
+    /// `windows`: the on-screen list, read once for every display's bar
+    /// when one needs it and handed back for the caller's own reads. Read
+    /// per display, a click on an anchored Mac read it three times.
+    func barsKeptConcealed(windows: inout [[String: Any]]?) -> Set<CGDirectDisplayID> {
+        var revealedOn: CGDirectDisplayID?
+        if let decision = revealDecision, decision.target == .menuBar {
+            guard decision.holdsOthers else { return [] }
+            revealedOn = decision.display
+        } else if !transitions.anchored {
+            return []
+        }
+        let hiding = NSScreen.screens.filter { screen in
+            guard let id = screen.directDisplayID, id != revealedOn, id != transitions.pressUnheld else { return false }
+            return settings.behavior(forDisplayUUID: screen.displayUUIDString) == .collapse
+        }
+        guard !hiding.isEmpty else { return [] }
+        if windows == nil { windows = ConcealGhostOverlay.onScreenWindows() }
+        return Set(hiding.compactMap { screen -> CGDirectDisplayID? in
+            // A bar auto-hidden or under a full-screen app draws nothing
+            // to keep concealed.
+            GlassPanel.drawnBarHeight(of: screen, fresh: true, in: windows) != nil ? screen.directDisplayID : nil
+        })
+    }
+
+    /// A connected display shows all icons: the bar stays out for it
+    /// wherever the pointer is, and the displays that hide icons are held
+    /// (`TransitionCoordinator.anchored`, #88).
+    var revealAnchored: Bool {
+        // The pictures need Screen Recording: without it the pointer's
+        // display decides, as before. `pelmet.debug.noAnchor` takes that
+        // path with the permission granted (#96).
+        screenRecordingGranted
+            && !UserDefaults.standard.bool(forKey: "pelmet.debug.noAnchor")
+            && settings.anchorsReveal(connectedDisplayUUIDs: NSScreen.screens.map(\.displayUUIDString))
+    }
+
+    /// Bring the bar to what the connected displays ask. Only from a
+    /// concealed bar: a reveal up settles first, and its conceal calls this.
+    func reconcileAnchor(_ why: String) {
+        let want = revealAnchored
+        guard want != transitions.anchorTarget else { return }
+        guard case .concealed = rehide.state else {
+            PelmetLog.log("anchor: \(want ? "on" : "off") waits for the conceal — \(why)")
+            return
+        }
+        PelmetLog.log("anchor: \(want ? "on" : "off") — \(why)")
+        transitions.setAnchored(want)
+    }
+
+    /// A click on a held bar's picture is a click on that bar's empty run.
+    private func heldBarClicked(display: CGDirectDisplayID?, clickCount: Int) {
+        PelmetLog.log("held: click ×\(clickCount) on display \(display.map(String.init) ?? "?")")
+        guard settings.revealTriggers.clickEnabled else { return }
+        if clickCount == 1 {
+            toggle(reason: .click)
+        } else if settings.revealTriggers.doubleClickForAlwaysHidden {
+            reveal([.hidden, .alwaysHidden], reason: .doubleClick)
+        }
+    }
+
+    /// The display's choice changed Panel ↔ Row under the panel it opened.
+    func revealRetargeted(_ target: RevealTarget) {
+        revealDecision?.target = target
+    }
+
+    /// What a reveal on `display` shows the hidden icons in.
+    func revealTarget(onDisplay display: CGDirectDisplayID?) -> RevealTarget {
+        settings.revealTarget(forDisplayUUID: display.flatMap(NSScreen.uuid(ofDisplay:)))
+    }
 
     /// The panel finished opening or closing: the machine's transition is
     /// over, as when the bar's reveal or conceal settles.
@@ -3323,7 +3888,7 @@ final class AppState {
                 // pointer has been on it.
                 let panelHolds = self.panelShowsReveal && self.panelPresenter.holdsReveal
                 if self.editorHoldsBar
-                    || self.pointerDisplayBehavior == .alwaysShowAll
+                    || (!self.transitions.anchored && self.pointerDisplayBehavior == .alwaysShowAll)
                     || self.applying
                     || panelHolds
                     || bandReason != nil {
@@ -3678,6 +4243,363 @@ final class AppState {
         }
     }
 
+    // MARK: The chevron behind Apple's « (#81)
+
+    /// macOS has put the chevron behind its « (`ChevronTrap`): the bar is
+    /// full, and the chevron, the leftmost item drawn, went first. Counted
+    /// in the « notice and "Didn't fit", named by the editor's hint.
+    private(set) var chevronTrapped = false
+    /// The « while the chevron is behind it: the reveal triggers stop at its
+    /// left edge (`MenuBarBandMonitor.revealTriggerMaxX`).
+    @ObservationIgnored private(set) var chevronTrapToggle: CGRect?
+    @ObservationIgnored private var chevronTrapCheck: Task<Void, Never>?
+    @ObservationIgnored private var chevronTrapRetry: Task<Void, Never>?
+    /// Own extras out of the bar so the chevron fits (`yieldForChevron`),
+    /// named by the editor's hint.
+    private(set) var chevronYielded: [ItemID] = []
+    @ObservationIgnored private var chevronYield: Task<Void, Never>?
+    @ObservationIgnored private var chevronYieldedAt: ContinuousClock.Instant?
+    /// The last extra's return: the room it came back into, when, and
+    /// whether the bar is still to be read for it (`confirmChevronRestore`).
+    /// The chevron behind the « again within 5s means that room was short.
+    @ObservationIgnored private var chevronRestore: (room: CGFloat, at: ContinuousClock.Instant, unread: Bool)?
+    @ObservationIgnored private var shortRoom: ShortRoom?
+    @ObservationIgnored private var chevronRestoreLater: Task<Void, Never>?
+    /// The bar read again after a return (`confirmChevronRestore`).
+    @ObservationIgnored private var chevronRestoreCheck: Task<Void, Never>?
+    /// The latest walk, for the room read (`chevronRoom`): a walk's trap and
+    /// return reads run before `snapshot` takes it, and read the room from
+    /// the walk before (room 60 from the chevron's old frame with 65 drawn,
+    /// no return, live test 2026-10-20 08:31:06).
+    @ObservationIgnored private var chevronRoomWalk: EngineSnapshot?
+    /// That walk's copies on every display's bar, by the walk's time: the
+    /// room on a bar other than the main display's (`chevronRoom`).
+    @ObservationIgnored private var chevronRoomCopies: (walk: Date, copies: [ItemID: [CGRect]])?
+    @ObservationIgnored private var chevronRoomCopiesFetch: Task<Void, Never>?
+
+    /// Reads the chevron against the «, on each walk and each time the
+    /// chevron's window changes occlusion. A trap holds 1s before it
+    /// counts: a reflow parks the chevron on the « for a moment, as at every
+    /// launch on a full bar.
+    func checkChevronTrap() {
+        guard barAttached, picturePassSections == nil, overflowReadHold == nil else {
+            // A full bar sitting still has no walk or occlusion change to
+            // come back on: at launch every walk fell inside the attach lead
+            // and the trap was never read (live test, 2026-10-19).
+            guard chevronTrapRetry == nil else { return }
+            chevronTrapRetry = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                self?.chevronTrapRetry = nil
+                self?.checkChevronTrap()
+            }
+            return
+        }
+        guard settings.showStatusItem, statusItem?.windowOcclusionVisible == false else {
+            chevronTrapCheck?.cancel()
+            chevronTrapCheck = nil
+            setChevronTrapped(false, toggle: nil)
+            return
+        }
+        guard chevronTrapCheck == nil else { return }
+        // The « by its label: an occlusion that stays off (a full-screen
+        // app, an auto-hidden bar) re-reads it on every walk, and the sweep
+        // is about 230 AX hit-tests.
+        chevronTrapCheck = Task { [weak self] in
+            var toggle = await self?.chevronBarToggle()
+            if self?.chevronTrapped == false, self?.chevronParked(on: toggle) == true {
+                try? await Task.sleep(for: .seconds(1))
+                toggle = await self?.chevronBarToggle()
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.chevronTrapCheck = nil
+            // A pass or a « hold that began during the hold reads again after it.
+            guard self.picturePassSections == nil, self.overflowReadHold == nil else { return self.checkChevronTrap() }
+            self.setChevronTrapped(self.chevronParked(on: toggle), toggle: toggle)
+        }
+    }
+
+    private func chevronParked(on toggle: CGRect?) -> Bool {
+        ChevronTrap.isTrapped(iconShown: settings.showStatusItem, occlusionVisible: statusItem?.windowOcclusionVisible,
+                              window: chevronWindowFrame, toggle: toggle)
+    }
+
+    private func setChevronTrapped(_ trapped: Bool, toggle: CGRect?) {
+        chevronTrapToggle = trapped ? toggle : nil
+        // Still behind: a yield that couldn't run when the trap began (the
+        // chevron on a screen with no notch, no extra up yet) gets its turn.
+        guard trapped != chevronTrapped else {
+            if trapped { yieldForChevron() }
+            return
+        }
+        chevronTrapped = trapped
+        PelmetLog.log(trapped
+            ? "overflow: chevron behind the « (at x=\(Int(toggle?.minX ?? 0)))"
+            : "overflow: chevron back on the bar")
+        if let snapshot { noteOverflow(in: snapshot) }
+        if trapped {
+            // The return just made pushed it behind: that extra goes first,
+            // and the room is learnt, from a bar at rest (a reveal fills the
+            // bar by itself).
+            var short: CGFloat?
+            if let restore = chevronRestore, ContinuousClock.now < restore.at + .seconds(5), chevronBarBusy == nil {
+                learnShortRoom(restore.room)
+                short = restore.room
+            }
+            chevronRestore = nil
+            chevronRestoreCheck?.cancel()
+            chevronRestoreCheck = nil
+            yieldForChevron(shortRoom: short)
+        } else {
+            restoreForChevronIfRoom()
+        }
+    }
+
+    /// The chevron's display when it has a notch, with the notch's right
+    /// edge. Nil off a notched bar: there the frontmost app's menus set the
+    /// room, which can't be measured for an extra to come back, and the
+    /// hint stays the answer.
+    private func chevronNotchedBar(_ frame: NSRect) -> (screen: NSScreen, notchMaxX: CGFloat)? {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSPoint(x: frame.midX, y: frame.midY)) }),
+              let notch = screen.auxiliaryTopRightArea else { return nil }
+        return (screen, notch.minX)
+    }
+
+    /// The room left of the drawn chevron's bar (`ChevronTrap.room`), from
+    /// its left end (`ChevronTrap.leftEdge`): the icons `walk` reads drawn
+    /// on the chevron's display. The walk frames the main display's bar;
+    /// another display's is read from its `copies` there.
+    private func chevronRoom(_ frame: NSRect, on bar: (screen: NSScreen, notchMaxX: CGFloat), walk: EngineSnapshot,
+                             copies: [ItemID: [CGRect]]?) -> CGFloat {
+        // Only what the bar draws now (`drawnNow`, which leaves out an extra
+        // put away, its frame still read for 0.7s): the walk just after a
+        // conceal still lists hidden icons where they stood, and pulled the
+        // left end in to a room of 1 (review, 2026-10-20).
+        let drawn = drawnNow(in: walk)
+        let concealed = Set(walk.concealed.map(\.sectionKey))
+        let display = bar.screen.directDisplayID.map(CGDisplayBounds)
+        let frames = walk.items.compactMap { item -> CGRect? in
+            guard drawn(item.id), !concealed.contains(item.id.sectionKey) else { return nil }
+            if let copies {
+                return display.flatMap { display in copies[item.id].flatMap { MenuBarGeometry.copy(onDisplay: display, among: $0) } }
+            }
+            guard let f = item.frame, PlacementGeometry.isPrimary(f, screenMaxX: bar.screen.frame.maxX) else { return nil }
+            return f
+        }
+        let edge = ChevronTrap.leftEdge(chevronMinX: frame.minX, frames: frames, notchMaxX: bar.notchMaxX)
+        return ChevronTrap.room(leftEdge: edge, notchMaxX: bar.notchMaxX)
+    }
+
+    /// The icons `walk` reads drawn, Pelmet's own aside (its extras come and
+    /// go for the chevron): the bar a short room was learnt on (`ShortRoom`).
+    private func chevronBarKeys(_ walk: EngineSnapshot) -> Set<ItemID> {
+        let drawn = drawnNow(in: walk)
+        return Set(walk.items.compactMap { item in
+            item.id.bundleID.map(PelmetBundle.ownIDs.contains) != true && drawn(item.id) ? item.id.sectionKey : nil
+        })
+    }
+
+    private func learnShortRoom(_ room: CGFloat) {
+        shortRoom = ShortRoom(room: room, bar: (chevronRoomWalk ?? snapshot).map(chevronBarKeys) ?? [])
+    }
+
+    /// Another display arrangement is another bar: a room learnt on the old
+    /// one doesn't hold there.
+    private func chevronDisplaysChanged() {
+        chevronRoomCopies = nil
+        guard let short = shortRoom else { return }
+        shortRoom = nil
+        PelmetLog.log("extras: displays changed, \(Int(short.room))pt is read again")
+    }
+
+    /// The walk's copies for another display's bar, then the return again.
+    private func fetchChevronRoomCopies(for walk: Date) {
+        guard chevronRoomCopiesFetch == nil else { return }
+        chevronRoomCopiesFetch = Task { [weak self] in
+            guard let copies = await self?.engine.barCopies() else { return }
+            self?.chevronRoomCopiesFetch = nil
+            self?.chevronRoomCopies = (walk, copies)
+            self?.restoreForChevronIfRoom()
+        }
+    }
+
+    /// What has the bar besides its icons now, nil at rest: a pass, a «
+    /// hold, Apply placing, a reveal.
+    private var chevronBarBusy: String? {
+        if picturePassSections != nil { return "pass" }
+        if overflowReadHold != nil { return "« hold" }
+        if applying { return "placing" }
+        if !currentRevealedSections.isEmpty { return "revealed" }
+        return nil
+    }
+
+    /// Makes room for the chevron with Pelmet's own extras in Visible,
+    /// nearest it first, one at a time until it draws again: no clicks, no
+    /// drags. Each frees about 42pt on the built-in. With `shortRoom`, the
+    /// extra that just came back into it goes first.
+    private func yieldForChevron(shortRoom: CGFloat? = nil) {
+        guard chevronYield == nil, let frame = chevronWindowFrame, chevronNotchedBar(frame) != nil else { return }
+        chevronYield = Task { [weak self] in
+            var shortRoom = shortRoom
+            while let self, self.chevronTrapped,
+                  (shortRoom.flatMap { self.extras?.yieldRestoredAgain(shortRoom: $0) } ?? self.extras?.yieldOne()) != nil {
+                shortRoom = nil
+                self.chevronYieldedAt = .now
+                self.chevronYielded = self.extras?.yieldedKeys ?? []
+                // The ghost hide leaves layout at 0.7s (`StatusItemFader`).
+                try? await Task.sleep(for: .seconds(1.2))
+                // The next only while the chevron is still parked on a listed
+                // «: occlusion alone also stays off on a locked screen, under
+                // a full-screen app or an auto-hidden bar, and the loop
+                // emptied Visible there (review, 2026-10-19).
+                let toggle = await self.chevronBarToggle()
+                guard self.chevronParked(on: toggle) else { break }
+            }
+            self?.chevronYield = nil
+        }
+    }
+
+    /// Brings an extra back once the chevron has room for it, one at a
+    /// time: on each walk (the bar changed), and 30s after the last went
+    /// out at the earliest, so a bar that flaps doesn't flap the extras.
+    private func restoreForChevronIfRoom() {
+        guard let extras else { return }
+        // An extra removed in Settings meanwhile has left the list.
+        if chevronYielded != extras.yieldedKeys { chevronYielded = extras.yieldedKeys }
+        func all() {
+            extras.restoreAllYielded()
+            chevronYielded = []
+            shortRoom = nil
+            chevronRestore = nil
+            chevronRestoreCheck?.cancel()
+            chevronRestoreCheck = nil
+        }
+        // No chevron to make room for.
+        guard settings.showStatusItem else { return all() }
+        // A return whose read gave up on a busy bar is read on the next walk.
+        if let restore = chevronRestore, restore.unread, chevronRestoreCheck == nil {
+            return confirmChevronRestore(room: restore.room)
+        }
+        // A short room is learnt for the extras out now, never for good. Kept
+        // while the trap's yield is on its way: the trap learns the room
+        // first, and a walk before the yield ran read an empty list and
+        // forgot it, so the same return came back every 30s (review,
+        // 2026-10-20).
+        guard !chevronYielded.isEmpty else {
+            if chevronYield == nil { shortRoom = nil }
+            return
+        }
+        guard let frame = chevronWindowFrame else { return }
+        guard let bar = chevronNotchedBar(frame) else {
+            // The chevron on a screen with no notch (its bar follows the
+            // active display): nothing to measure there, and bringing them
+            // all back yielded them again at each switch (review,
+            // 2026-10-19). They wait for the notched bar, or come back once
+            // no notched screen is left (the lid closed).
+            if !NSScreen.screens.contains(where: { $0.auxiliaryTopRightArea != nil }) { all() }
+            return
+        }
+        guard chevronYield == nil, chevronRestoreCheck == nil, !chevronTrapped, barAttached, chevronBarBusy == nil,
+              statusItem?.windowOcclusionVisible == true else { return }
+        // A walk mid-move reads icons on their way: the walk at rest after it
+        // decides (`updateSnapshot` takes it even when it reads the same).
+        guard let walk = chevronRoomWalk ?? snapshot, walk.itemsAtRest else { return }
+        var copies: [ItemID: [CGRect]]?
+        if bar.screen.directDisplayID != NSScreen.screens.first?.directDisplayID {
+            // The walk frames the main display's bar: a built-in that isn't
+            // the main display is read from the same walk's copies there.
+            guard let held = chevronRoomCopies, held.walk == walk.takenAt else {
+                return fetchChevronRoomCopies(for: walk.takenAt)
+            }
+            copies = held.copies
+        }
+        let room = chevronRoom(frame, on: bar, walk: walk, copies: copies)
+        if let short = shortRoom, !short.holds(on: chevronBarKeys(walk)) {
+            PelmetLog.log("extras: the bar changed, \(Int(short.room))pt is read again")
+            shortRoom = nil
+        }
+        // A full bar at rest has no walk to come back on.
+        let due = max(chevronYieldedAt.map { $0 + .seconds(30) } ?? .now, chevronRestore.map { $0.at + .seconds(2) } ?? .now)
+        guard ContinuousClock.now >= due else {
+            if chevronRestoreLater == nil {
+                chevronRestoreLater = Task { [weak self] in
+                    try? await Task.sleep(until: due, clock: .continuous)
+                    self?.chevronRestoreLater = nil
+                    self?.restoreForChevronIfRoom()
+                }
+            }
+            return
+        }
+        guard extras.restoreYielded(room: room, failedRoom: shortRoom?.room) != nil else { return }
+        chevronRestore = (room, .now, true)
+        chevronYielded = extras.yieldedKeys
+        confirmChevronRestore(room: room)
+    }
+
+    /// Reads the bar again once the agent has laid a return out
+    /// (`RestoreCheck`): a « read 1.2s after it and still there 1.2s later
+    /// means the extra didn't fit after all, wherever the agent put it
+    /// (behind the «, or pushing the chevron there; the trap read has that
+    /// one first). A return only runs with no « on the bar (`chevronRoom`
+    /// counts an icon parked on one), so a « that stays is this return's.
+    /// The extra goes out again and the room it failed at is learnt
+    /// (`ShortRoom`), so it can't flap. Reads count only with the bar at
+    /// rest: a return while audio plays places MediaControls (`applying`
+    /// from 600ms), and a hover reveal or an item press has a bar of its
+    /// own. A read dropped then left the « and the extra behind it, as at
+    /// 22:47:38 (review, 2026-10-20). Busy for 30s, the next walk reads it.
+    /// The next return waits for the read.
+    private func confirmChevronRestore(room: CGFloat) {
+        chevronRestoreCheck = Task { [weak self] in
+            var check = RestoreCheck()
+            var waited = false
+            for _ in 0..<25 {
+                try? await Task.sleep(for: .seconds(1.2))
+                guard let self, !Task.isCancelled else { return }
+                if let busy = self.chevronBarBusy {
+                    if !waited { PelmetLog.log("extras: the return's read waits, the bar is busy (\(busy))") }
+                    waited = true
+                    continue
+                }
+                let toggle = await self.chevronBarToggle()
+                // Busy meanwhile: the read is the busy bar's.
+                guard !Task.isCancelled else { return }
+                guard self.chevronBarBusy == nil else { continue }
+                switch check.read(toggleOnBar: toggle != nil) {
+                case nil:
+                    continue
+                case .fits:
+                    self.chevronRestoreCheck = nil
+                    self.chevronRestore?.unread = false
+                    if waited { PelmetLog.log("extras: the return read at rest, no «") }
+                    self.restoreForChevronIfRoom()
+                case .short:
+                    self.chevronRestoreCheck = nil
+                    self.chevronRestore = nil
+                    self.learnShortRoom(room)
+                    guard let extras = self.extras, extras.yieldRestoredAgain(shortRoom: room) != nil else { return }
+                    self.chevronYieldedAt = .now
+                    self.chevronYielded = extras.yieldedKeys
+                }
+                return
+            }
+            self?.chevronRestoreCheck = nil
+            PelmetLog.log("extras: the return's read gave up, the bar was busy for 30s")
+        }
+    }
+
+    /// The « on the chevron's bar, by its label
+    /// (`OverflowToggle.listedToggles`): with a bar on each display, the
+    /// first the agent lists can be another display's (review,
+    /// 2026-10-20). Nil when that bar has none.
+    private func chevronBarToggle() async -> CGRect? {
+        let display = chevronWindowFrame.flatMap { frame in
+            NSScreen.screens.first { $0.frame.contains(NSPoint(x: frame.midX, y: frame.midY)) }
+        }?.directDisplayID.map(CGDisplayBounds)
+        let toggles = await Task.detached { OverflowToggle.listedToggles().map(\.frame) }.value
+        guard let display else { return toggles.first }
+        return toggles.first { MenuBarGeometry.isInBand($0, ofDisplay: display) }
+    }
+
     private func noteOverflow(in snap: EngineSnapshot) {
         // A pass's bar is under its cover, a whole bar out at once: what it
         // pushes behind the « is not the bar anyone sees, and "Didn't fit"
@@ -3722,12 +4644,17 @@ final class AppState {
             guard let f = item.frame, drawn(item.id) else { return false }
             return PlacementGeometry.isPrimary(f, screenMaxX: primaryMaxX)
         }
-        let trappedItems = PlacementGeometry.overflowTrapped(framed.map { $0.frame! }).map { framed[$0].id }
+        var trappedItems = PlacementGeometry.overflowTrapped(framed.map { $0.frame! }).map { framed[$0].id }
+        // A lone chevron behind the « overlaps nothing, its frame parked on
+        // the « (#81): `chevronTrapped` reads it, already held for 1s.
+        if chevronTrapped, let chevron = pelmetChevronItem(in: snap)?.id, !trappedItems.contains(chevron) {
+            trappedItems.append(chevron)
+        }
         let trapped = trappedItems.count
         // Two consecutive reads to enter (a mid-attach walk at boot read two
         // items at one x for 200ms), one to leave.
         defer { lastOverflowRead = trapped }
-        if trapped > 0, overflowTrappedCount == 0, lastOverflowRead == 0 { return }
+        if trapped > 0, overflowTrappedCount == 0, lastOverflowRead == 0, !chevronTrapped { return }
         // Same count, other icons (Velja behind the « where Snib was): the
         // list follows every read the count takes, or "Didn't fit" kept
         // naming the icon that had left.
@@ -3801,11 +4728,24 @@ final class AppState {
     }
 
     func updateSnapshot(_ snap: EngineSnapshot) {
+        defer {
+            if transitions.anchored {
+                transitions.refreshHeld("items moved")
+            } else if launchBaselineApplied, case .concealed = rehide.state, revealAnchored, !transitions.anchorTarget,
+                      transitions.anchorFailedAt.map({ -$0.timeIntervalSinceNow > 30 }) ?? true {
+                // An anchor that found no bar to picture (a locked screen at
+                // launch) tries again once the bar reads.
+                reconcileAnchor("items moved")
+            }
+        }
         let now = Date.now
         // Kept even when the walk reads as the snapshot in hand and is
         // dropped below: it read the bar at rest all the same, and an extra
         // shown before it is read (`unreadNow`).
         if snap.itemsAtRest, snap.takenAt > (lastRestWalkAt ?? .distantPast) { lastRestWalkAt = snap.takenAt }
+        chevronRoomWalk = snap
+        checkChevronTrap()
+        restoreForChevronIfRoom()
         noteOverflow(in: snap)
         let primary = ApplyPass.primaryFrames(snap, appState: self)
         let chevronMidX = pelmetChevronItem(in: snap).flatMap { primary[$0.id.sectionKey]?.midX }
@@ -3915,9 +4855,12 @@ final class AppState {
             pruneSettledOrderEdits()
             if settings.orderEdits != before { settings.save() }
         }
-        clockRelay?.updateClockFrame(
-            snap.items.first { $0.id.rawValue.hasSuffix("::com.apple.menuextra.clock") }?.frame
-        )
+        let isClock = { (id: ItemID) in id.rawValue.hasSuffix("::com.apple.menuextra.clock") }
+        if let frame = snap.items.first(where: { isClock($0.id) })?.frame {
+            clockRelay?.updateClockFrame(frame)
+        } else if snap.concealed.contains(where: isClock) {
+            clockRelay?.clockConcealed()
+        }
         bundleCounts = snap.items.reduce(into: [:]) { counts, item in
             guard let bundle = item.id.bundleID else { return }
             counts[bundle, default: 0] += 1
@@ -4073,8 +5016,17 @@ final class AppState {
             // The editor's drawing outranks the bar until Apply. The
             // periodic pass reconciled the hidden order from the bar
             // between two drops and every tile jumped back (2026-09-20 17:28).
+            // Not in the section of a named drag: that drag moved the one
+            // icon (M2), and the drawing takes it too, or the order keeper
+            // dragged it back to its drawn slot (review, 2026-10-20).
+            let draggedSection = draggedID.map { result.model.section(of: $0.sectionKey) }
             for section in settings.orderEdits.order.keys {
-                model.order[section] = settings.sectionModel.order[section]
+                guard section == draggedSection, let order = model.order[section] else {
+                    model.order[section] = settings.sectionModel.order[section]
+                    continue
+                }
+                let drawn = Set(settings.orderEdits.order[section] ?? [])
+                settings.orderEdits.order[section] = order.filter(drawn.contains)
             }
             settings.sectionModel = model
             settings.save()

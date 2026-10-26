@@ -11,7 +11,9 @@ import SwiftUI
 /// Sits on the pane's title row (the settings shell places it). Sets core
 /// (docs/CORE-SETS.md M1): the editor is a drawing; this is the one door
 /// through which the bar moves. Shows the pending move count (drawn edits
-/// plus icons on the wrong side of the chevron) and Discard beside it.
+/// plus icons on the wrong side of the chevron). No Discard since
+/// 0.3.3-beta.5: the keeper applies a drawing on its own at the next pause,
+/// so an editor mistake is undone by dragging it back.
 struct ApplyBarButton: View {
     @Environment(AppState.self) private var appState
 
@@ -43,11 +45,6 @@ struct ApplyBarButton: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-            }
-            if !appState.settings.orderEdits.isEmpty, !appState.applying {
-                Button("Discard") { appState.discardOrderEdits() }
-                    .font(.callout)
-                    .help("Forget the pending order changes; the editor shows the bar as it is")
             }
             // Same chip family as General's permission row (de-box, tinted
             // capsule). Only there while there is something to apply (or a
@@ -86,21 +83,34 @@ struct OverflowHint: View {
 
     var body: some View {
         let count = appState.overflowNoticeCount
+        // The chevron is the one that matters: without it the hidden icons
+        // are out of reach (#81).
+        let chevron = appState.chevronTrapped
+        // Own extras out of the bar so the chevron fits: nothing is behind
+        // the «, but icons the user put in Visible are gone for now.
+        let yielded = count == 0 && !appState.chevronYielded.isEmpty
         Group {
-            if count > 0 {
+            if count > 0 || yielded {
                 Label {
-                    count == 1 ? Text("1 icon doesn't fit") : Text("\(count) icons don't fit")
+                    yielded ? Text("Made room for the chevron")
+                        : chevron ? Text("The chevron doesn't fit")
+                        : count == 1 ? Text("1 icon doesn't fit") : Text("\(count) icons don't fit")
                 } icon: {
                     Image(systemName: "rectangle.compress.vertical")
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .help("Your menu bar is full: \(count) icons sit behind macOS's « until there's room. Dimble leaves them where they are.")
+                .truncationMode(.tail)
+                .help(yielded
+                    ? Text("Your menu bar is full: Dimble took some of its own icons out so the chevron stays on the bar. They come back when there's room.")
+                    : chevron
+                    ? Text("Your menu bar is full: the chevron sits behind macOS's « until there's room. Move an icon to Hidden to bring it back.")
+                    : Text("Your menu bar is full: \(count) icons sit behind macOS's « until there's room. Dimble leaves them where they are."))
                 .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: count > 0)
+        .animation(.easeOut(duration: 0.2), value: count > 0 || yielded)
     }
 }
 
@@ -1059,6 +1069,11 @@ private struct PelmetItemsStrip: View {
                     caption: "Siri, as an icon you can move. Replaces Apple's while it's on.",
                     isOn: hasKind(.siri)
                 ) { toggleKind(.siri, on: $0) }
+                PelmetItemRow(
+                    symbol: "note.text", title: "Quick Note",
+                    caption: "Start a Quick Note in a click.",
+                    isOn: hasKind(.quickNote)
+                ) { toggleKind(.quickNote, on: $0) }
                 PelmetItemRow(
                     symbol: "timer", title: "Timer",
                     caption: "A countdown that stays in view and rings when it ends.",

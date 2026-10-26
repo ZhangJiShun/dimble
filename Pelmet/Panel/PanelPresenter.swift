@@ -84,9 +84,11 @@ final class PanelPresenter: RevealPresenter {
     /// Opened by the pointer on a bar (a hover, a click, a ⌘-drag), not by
     /// a key or Settings: the pointer's display is the one (`targetScreen`).
     private var openedAtBar = false
-    private static let atBarReasons: Set<RevealReason> = [.hover, .displayPolicy, .click, .doubleClick, .statusItem, .barDrag]
     /// A display unplugged or rearranged while it is open.
     private var screenObserver: NSObjectProtocol?
+    /// Windows built again because the window server had the panel off the
+    /// active Space (#100).
+    private var spaceRebuilds = 0
     /// Held like a menu until the pointer is on the panel: opened from the
     /// keyboard, or reshaped by its column grip (a drag let go past the
     /// edge, or a reset that shrinks the panel from under the pointer,
@@ -268,8 +270,10 @@ final class PanelPresenter: RevealPresenter {
         if !wasOpen {
             presentation.reset()
             awaitsPointer = reason == .hotkey
-            openScreen = nil
-            openedAtBar = reason.map(Self.atBarReasons.contains) ?? false
+            // Where the reveal was decided (#88): that display's choice
+            // brought the panel, so it opens there.
+            openScreen = appState?.revealDecision?.display
+            openedAtBar = reason.map(RevealRouting.startsAtBar) ?? false
             foldOpen = false
             query = ""
             selected = nil
@@ -391,6 +395,12 @@ final class PanelPresenter: RevealPresenter {
         hosting.sizingOptions = []
         let window = KeyableGlassPanel(content: hosting, cornerRadius: Self.cornerRadius)
         window.alphaValue = 0
+        // Dev: `pelmet.debug.panelOneSpace` keeps the first window to one
+        // Space, to check the rebuild in `show` (#100): open the panel once,
+        // switch Space, open it there.
+        if spaceRebuilds == 0, UserDefaults.standard.bool(forKey: "pelmet.debug.panelOneSpace") {
+            window.collectionBehavior.remove(.canJoinAllSpaces)
+        }
         // A display unplugged, the lid closed, a scale changed: place it
         // again (on another display if its own is gone).
         screenObserver = NotificationCenter.default.addObserver(
@@ -434,7 +444,28 @@ final class PanelPresenter: RevealPresenter {
     }
 
     private func show(takeKey: Bool, fadeIn: Bool) {
-        guard let window else { return }
+        guard var window else { return }
+        present(window, fadeIn: fadeIn)
+        // The window joins every Space, yet one Mac had the panel open on
+        // one Space only (#100, not seen on 27.2): ordered in off the active
+        // Space, it is built again, once per show.
+        if !window.isOnActiveSpace, let rebuilt = rebuildOffSpace(window) {
+            window = rebuilt
+            present(window, fadeIn: fadeIn)
+            PelmetLog.log("panel: built again, \(window.isOnActiveSpace ? "on" : "still off") the active Space")
+        }
+        // Keys only for a panel opened on purpose: a hover passing by must
+        // not take the typing from the app in front.
+        if takeKey {
+            disarmTyping()
+            window.makeKey()
+            installKeyMonitor()
+        } else {
+            armTyping()
+        }
+    }
+
+    private func present(_ window: KeyableGlassPanel, fadeIn: Bool) {
         window.ignoresMouseEvents = false
         // Dev: `pelmet.debug.panelAppearance` light or dark checks the other
         // mode without changing the Mac's. Read at each open.
@@ -457,15 +488,39 @@ final class PanelPresenter: RevealPresenter {
             window.alphaValue = 1
             window.orderFrontRegardless()
         }
-        // Keys only for a panel opened on purpose: a hover passing by must
-        // not take the typing from the app in front.
-        if takeKey {
-            disarmTyping()
-            window.makeKey()
-            installKeyMonitor()
-        } else {
-            armTyping()
-        }
+    }
+
+    /// Logs where the window server has `old`, then drops it for a new
+    /// window with the same content and place.
+    private func rebuildOffSpace(_ old: KeyableGlassPanel) -> KeyableGlassPanel? {
+        PelmetLog.log("panel: window \(old.windowNumber) off the active Space (\(Self.spaces(of: old)), behavior \(old.collectionBehavior.rawValue)), building it again")
+        old.orderOut(nil)
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
+        window = nil
+        hosting = nil
+        spaceRebuilds += 1
+        refresh()
+        return window
+    }
+
+    /// The Spaces the window server has `window` on, and the active one, for
+    /// the log (private CGS, resolved via dlsym like the mover's).
+    private static func spaces(of window: NSWindow) -> String {
+        typealias Connection = @convention(c) () -> Int32
+        typealias Active = @convention(c) (Int32) -> UInt64
+        typealias Spaces = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
+        let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let connectionSym = dlsym(rtldDefault, "CGSMainConnectionID"),
+              let activeSym = dlsym(rtldDefault, "CGSGetActiveSpace"),
+              let spacesSym = dlsym(rtldDefault, "SLSCopySpacesForWindows") ?? dlsym(rtldDefault, "CGSCopySpacesForWindows")
+        else { return "Spaces unreadable" }
+        let cid = unsafeBitCast(connectionSym, to: Connection.self)()
+        let active = unsafeBitCast(activeSym, to: Active.self)(cid)
+        // 7: every Space the window is on, shown or not.
+        let on = unsafeBitCast(spacesSym, to: Spaces.self)(cid, 7, [window.windowNumber] as CFArray)?
+            .takeRetainedValue() as? [Int] ?? []
+        return "on \(on.isEmpty ? "no Space" : on.map(String.init).joined(separator: ", ")), active \(active)"
     }
 
     private func close() {
@@ -746,34 +801,38 @@ final class PanelPresenter: RevealPresenter {
         window.place(frame.offsetBy(dx: 0, dy: motion?.offset(at: CACurrentMediaTime()) ?? 0), glassHeight: frame.height)
     }
 
-    /// The display the panel opens on, and keeps until it closes: the
-    /// pointer's. The chevron's button window lives on one display while
-    /// every bar draws a copy of it, so the chevron's display put a click,
-    /// Show All or ⌘-drag on another display's bar on that one (as AppKit
-    /// does the chevron's menu, #26). A shortcut or Settings can come with
-    /// the pointer anywhere: its display only when a bar is drawn there, or
-    /// the panel hung under no bar, over an app (Displays have separate
-    /// Spaces off, an app full screen); the chevron's or the primary one (the
-    /// first screen, never NSScreen.main: that is the key window's) if not.
+    /// The display the panel opens on, and keeps until it closes: the one
+    /// the reveal was decided on (`AppState.decidingScreen`), the pointer's.
+    /// The chevron's button window lives on one display while every bar
+    /// draws a copy of it, so the chevron's display put a click, Show All or
+    /// ⌘-drag on another display's bar on that one (as AppKit does the
+    /// chevron's menu, #26). A shortcut or Settings can come with the
+    /// pointer anywhere: its display only when a bar is drawn there, or the
+    /// panel hung under no bar, over an app (Displays have separate Spaces
+    /// off, an app full screen); the active display's or the primary if not.
     private func targetScreen() -> NSScreen? {
         let screens = NSScreen.screens
         if let id = openScreen, let kept = screens.first(where: { $0.directDisplayID == id }) { return kept }
-        let pointerScreen = screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
-        let barUnderPointer = pointerScreen.map { openedAtBar || GlassPanel.drawnBarHeight(of: $0, fresh: true) != nil } ?? false
-        let target = (barUnderPointer ? pointerScreen : nil) ?? drawnChevron()?.screen ?? screens.first
+        let target = appState?.decidingScreen(atBar: openedAtBar) ?? screens.first
         openScreen = target?.directDisplayID
         if let target {
-            let from = barUnderPointer ? "the pointer's"
-                : pointerScreen != nil ? "no bar under the pointer, the chevron's or main" : "no pointer, fallback"
+            let from = target == NSScreen.underPointer ? "the pointer's" : "no bar under the pointer, the active or primary"
             PelmetLog.log("panel: on display \(openScreen.map(String.init) ?? "?") (\(from)), bar \(Int(GlassPanel.barHeight(of: target)))pt")
         }
         return target
     }
 
+    /// Panel or Row, as the display it opened on picked it (kept until it
+    /// closes, `AppState.revealDecision`).
+    private var layout: PanelGrid.Layout {
+        appState?.revealDecision?.target.panelLayout ?? appState?.revealTarget.panelLayout ?? .panel
+    }
+
     /// The chevron and its display, nil when it isn't in a bar's band (icon
-    /// off, behind Apple's «, not placed yet): a parked frame would place
-    /// the panel by nothing on screen. The band is the bar's own height
-    /// (`GlassPanel.barBand`), 30pt on an external display.
+    /// off, not placed yet): a parked frame would place the panel by nothing
+    /// on screen. Behind Apple's « the frame stays in the band, parked on
+    /// the «, and the panel opens under the « (#81). The band is the bar's
+    /// own height (`GlassPanel.barBand`), 30pt on an external display.
     private func drawnChevron() -> (frame: NSRect, screen: NSScreen)? {
         guard let frame = appState?.chevronWindowFrame else { return nil }
         let mid = NSPoint(x: frame.midX, y: frame.midY)
@@ -820,7 +879,7 @@ final class PanelPresenter: RevealPresenter {
         }
         let aimed = tileDrag.flatMap { drag in drag.slot.map { (tile: drag.tile, slot: $0) } }
         let (built, missing, model) = buildContent(
-            appState, layout: appState.revealTarget.panelLayout ?? .panel, query: query, selected: selected,
+            appState, layout: layout, query: query, selected: selected,
             foldOpen: foldOpen, alwaysRequested: sections.contains(.alwaysHidden), maxRowWidth: rowWidth, aimed: aimed, live: true)
         var content = built
         lastModel = model
@@ -885,7 +944,7 @@ final class PanelPresenter: RevealPresenter {
             onFold: { [weak self] in self?.toggleFold() },
             tileMenu: { [weak self] tile in self?.menu(for: tile) ?? [] },
             panelMenu: { [weak self] in
-                self?.panelMenu(shown: self?.lastContent) { [weak self] in self?.toggleFold() } ?? []
+                self?.panelMenu(shown: self?.lastContent, onPanel: true) { [weak self] in self?.toggleFold() } ?? []
             },
             // The grip is the window's own (`updateGrip`), not the view's.
             drawsGrip: false,
@@ -1929,15 +1988,18 @@ final class PanelPresenter: RevealPresenter {
 
     /// The mock's panel menu: the layout, names, Always Hidden, Settings.
     /// `shown` is what the panel it opens on draws, `toggleFold` its fold.
-    func panelMenu(shown: PanelContent?, toggleFold: @escaping () -> Void) -> [PanelMenuRow] {
+    /// `onPanel`: the open panel's, whose Layout is its display's; else
+    /// Settings' preview, whose Layout is the Panel tab's.
+    func panelMenu(shown: PanelContent?, onPanel: Bool = false, toggleFold: @escaping () -> Void) -> [PanelMenuRow] {
         guard let appState else { return [] }
-        let layout = appState.revealTarget.panelLayout ?? .panel
+        let layout = onPanel ? self.layout : appState.revealTarget.panelLayout ?? .panel
+        let display = onPanel ? openScreen : nil
         let alwaysShown = shown?.showsAlwaysHidden ?? false
         let hasAlways = shown?.hasAlwaysHidden ?? false
         return [
             .header(String(localized: "Layout")),
-            .check(String(localized: "Panel"), layout == .panel) { [weak self] in self?.setTarget(.panel) },
-            .check(String(localized: "Row"), layout == .row) { [weak self] in self?.setTarget(.row) },
+            .check(String(localized: "Panel"), layout == .panel) { [weak self] in self?.pick(.panel, onDisplay: display) },
+            .check(String(localized: "Row"), layout == .row) { [weak self] in self?.pick(.row, onDisplay: display) },
             .divider,
             .check(String(localized: "Tiles"), appState.settings.panel.style == .tiles, enabled: layout == .panel) { [weak self] in self?.setStyle(.tiles) },
             .check(String(localized: "Compact"), appState.settings.panel.style == .tight, enabled: layout == .panel) { [weak self] in self?.setStyle(.tight) },
@@ -1965,19 +2027,41 @@ final class PanelPresenter: RevealPresenter {
         ]
     }
 
-    /// The layout picked from the panel's menu is the setting from then on.
-    /// Panel ↔ Row re-lays an open panel. A pick that moves the icons
-    /// between the bar and a panel while they're out hides them instead:
-    /// whatever showed them takes them down, and the next open uses the new
-    /// place (#26). Refreshing would draw Menu bar as a grid, and a bar
-    /// reveal would stay out with nothing to close it.
-    func setTarget(_ target: RevealTarget) {
+    /// The layout picked from the panel's menu, or the bar's, is the setting
+    /// from then on: the display's own when it was picked on one that has
+    /// its own (Settings › Displays), the Panel tab's otherwise.
+    func pick(_ target: RevealTarget, onDisplay display: CGDirectDisplayID?) {
+        let uuid = display.flatMap(NSScreen.uuid(ofDisplay:))
+        let own = appState?.settings.ownRevealTarget(forDisplayUUID: uuid) != nil
+        setTarget(target, forDisplayUUID: own ? uuid : nil)
+    }
+
+    /// The Panel tab's "Show hidden icons in", or with `uuid` that display's
+    /// own (nil: "Same as Panel tab"). Panel ↔ Row re-lays an open panel. A
+    /// pick that moves the icons out now between the bar and a panel hides
+    /// them instead: whatever showed them takes them down, and the next open
+    /// uses the new place (#26). Refreshing would draw Menu bar as a grid,
+    /// and a bar reveal would stay out with nothing to close it. A reveal
+    /// that needed the bar whatever the choice (Apply, the editor's preview)
+    /// stays.
+    func setTarget(_ target: RevealTarget?, forDisplayUUID uuid: String? = nil) {
         guard let appState else { return }
-        let crossesBar = (appState.revealTarget.panelLayout == nil) != (target.panelLayout == nil)
-        appState.settings.hiddenIconsIn = target
+        if let uuid {
+            appState.settings.displayRevealTargets[uuid] = target
+        } else if let target {
+            appState.settings.hiddenIconsIn = target
+        }
         appState.settingsChanged()
-        PelmetLog.log("panel: layout \(target.rawValue)")
-        if crossesBar, isOpen || appState.sectionsRevealed {
+        PelmetLog.log("panel: layout \(target?.rawValue ?? "same as the Panel tab")\(uuid.map { " for display \($0)" } ?? "")")
+        // The reveal out now, on the display it was decided on.
+        guard let shown = appState.revealDecision, shown.followsChoice else {
+            if isOpen { refresh() }
+            return
+        }
+        let after = appState.settings.revealTarget(forDisplayUUID: shown.uuid)
+        let crossesBar = (shown.target.panelLayout == nil) != (after.panelLayout == nil)
+        if !crossesBar, isOpen { appState.revealRetargeted(after) }
+        if crossesBar {
             PelmetLog.log("panel: layout moved the open icons, concealing")
             appState.concealNow()
         } else if isOpen {

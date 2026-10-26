@@ -70,7 +70,8 @@ final class PelmetStatusItem {
     /// Where the chevron is drawn right now, in screen coordinates. AppKit
     /// keeps the button's window on the drawn item (popovers anchor to it),
     /// so this never lags a reflow the way a walked frame can. Nil before
-    /// the item is placed or once it's off the bar.
+    /// the item is placed or once it's off the bar. Behind Apple's « it
+    /// stays on the bar, parked on the « (#81): read `windowOcclusionVisible`.
     var windowFrame: NSRect? {
         guard let frame = item.button?.window?.frame, frame.width > 0, frame.height > 0 else { return nil }
         return frame
@@ -82,6 +83,15 @@ final class PelmetStatusItem {
         guard item.isVisible, let button = item.button, let window = button.window,
               !button.isHiddenOrHasHiddenAncestor, !button.bounds.isEmpty else { return nil }
         return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
+    /// The chevron's window; its occlusion is the one sign it went behind
+    /// Apple's « (`ChevronTrap`, #81).
+    var buttonWindow: NSWindow? { item.button?.window }
+
+    /// Whether AppKit reads the chevron's window as visible, nil without one.
+    var windowOcclusionVisible: Bool? {
+        buttonWindow.map { $0.occlusionState.contains(.visible) }
     }
 
     /// An available update earns a 5pt accent dot at the chevron's top
@@ -272,7 +282,9 @@ final class PelmetStatusItem {
             styles.addItem(option)
         }
         animation.submenu = styles
-        // Where the hidden icons show, as Settings › Panel picks it.
+        // Where the hidden icons show from this display's bar: its own
+        // choice (Settings › Displays) or the Panel tab's.
+        let display = NSScreen.underPointer?.directDisplayID
         let shownIn = NSMenuItem(title: String(localized: "Show hidden icons in"), action: nil, keyEquivalent: "")
         let targets = NSMenu()
         for (option, title) in [
@@ -282,7 +294,7 @@ final class PelmetStatusItem {
         ] {
             let item = NSMenuItem(title: title, action: #selector(AppMenuTarget.setRevealTarget(_:)), keyEquivalent: "")
             item.representedObject = option.rawValue
-            item.state = appState.revealTarget == option ? .on : .off
+            item.state = appState.revealTarget(onDisplay: display) == option ? .on : .off
             item.target = target
             targets.addItem(item)
         }
@@ -365,7 +377,7 @@ final class AppMenuTarget: NSObject {
     @objc func setRevealTarget(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let option = RevealTarget(rawValue: raw) else { return }
-        appState?.panelPresenter.setTarget(option)
+        appState?.panelPresenter.pick(option, onDisplay: NSScreen.underPointer?.directDisplayID)
     }
     @objc func grantAccessibility() { AccessibilityAccess.request() }
     /// The About pane is the update hub (chip, notes, toggles) — land there

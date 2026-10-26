@@ -214,6 +214,11 @@ public enum ExtraKind: String, Codable, CaseIterable, Sendable {
     /// log with the mode's name and symbol in the clear (probed 2026-09-16),
     /// so a Pelmet-drawn twin can follow along.
     case focus
+    /// Quick Note. Apple's icon is Notes' Control Center control
+    /// (`QuickNoteControl`), which every hide assertion takes off the bar
+    /// whatever the allowlist names (#99). A Pelmet-drawn twin posts the
+    /// user's own Quick Note shortcut (symbolic hotkey 190).
+    case quickNote
 }
 
 /// When an activity-driven item sits in the bar — System Settings' "Always
@@ -271,11 +276,11 @@ public enum ExtraStyle: String, Codable, CaseIterable, Sendable {
 extension ExtraKind {
     /// The kinds that stand in for a collateral-hidden system extra
     /// (Now Playing, the camera pill and SharePlay, AirDrop, Focus, the
-    /// Clock timer, fast user switching, the Shortcuts control). Siri and
-    /// Time Machine replace SystemUIServer items, which hide by the
-    /// allowlist like any app.
+    /// Clock timer, fast user switching, the Shortcuts control, Quick Note's
+    /// Notes control). Siri and Time Machine replace SystemUIServer items,
+    /// which hide by the allowlist like any app.
     public static let collateralReplicas: Set<ExtraKind> = [
-        .mediaControls, .cameraMicIndicator, .airdrop, .focus, .timer, .userSwitching, .shortcutsMenu,
+        .mediaControls, .cameraMicIndicator, .airdrop, .focus, .timer, .userSwitching, .shortcutsMenu, .quickNote,
     ]
 }
 
@@ -335,6 +340,7 @@ public struct ExtraItemSpec: Codable, Equatable, Identifiable, Sendable {
         case .timeMachine: "Pelmet.TimeMachine"
         case .siri: "Pelmet.Siri"
         case .focus: "Pelmet.Focus"
+        case .quickNote: "Pelmet.QuickNote"
         }
     }
 }
@@ -345,7 +351,7 @@ public struct ExtraItemSpec: Codable, Equatable, Identifiable, Sendable {
 /// Glyph for Pelmet's own menu bar icon. Each style has a concealed and a
 /// revealed face so the icon keeps pointing at what a click will do.
 public enum StatusIconStyle: String, Codable, CaseIterable, Sendable, Identifiable {
-    case chevron, arrow, eye, dots, grid, panel, dot
+    case chevron, arrow, eye, dots, grid, panel, dot, smallDot
 
     public var id: String { rawValue }
 
@@ -358,14 +364,19 @@ public enum StatusIconStyle: String, Codable, CaseIterable, Sendable, Identifiab
         case .dots: "ellipsis"
         case .grid: "square.grid.2x2"
         case .panel: revealed ? "rectangle.righthalf.inset.filled" : "rectangle.lefthalf.inset.filled"
-        case .dot: revealed ? "circlebadge" : "circlebadge.fill"
+        case .dot, .smallDot: revealed ? "circlebadge" : "circlebadge.fill"
         }
     }
 
     /// Symbol point size when the style draws smaller than the bar's
-    /// default 13. The dot at 13 read too big next to the chevron (#62).
+    /// default 13. The dot at 13 read too big next to the chevron (#62); the
+    /// small one is half its width, 3.5pt against 6.5pt (#98).
     public var symbolPointSize: Double? {
-        self == .dot ? 9 : nil
+        switch self {
+        case .dot: 9
+        case .smallDot: 5
+        default: nil
+        }
     }
 }
 
@@ -486,6 +497,10 @@ public struct SettingsStore: Codable, Equatable, Sendable {
     /// the template is the fallback `behavior(forDisplayUUID:)` returns.
     public var displayTemplate: DisplayBehavior = .collapse
     public var displayOverrides: [String: DisplayBehavior] = [:]
+    /// "Show hidden icons in" per display (#88), keyed like
+    /// `displayOverrides`. A display with no entry follows `hiddenIconsIn`
+    /// (Settings › Displays calls it "Same as Panel tab").
+    public var displayRevealTargets: [String: RevealTarget] = [:]
 
     public var rehidePolicy: RehidePolicy {
         RehidePolicy(
@@ -507,6 +522,34 @@ public struct SettingsStore: Codable, Equatable, Sendable {
         return displayOverrides[uuid] ?? displayTemplate
     }
 
+    /// Each display keeps its own behavior wherever the pointer is (#88): a
+    /// connected display that shows all icons holds the bar out, and the
+    /// ones that hide icons are covered. macOS draws one set of icons on
+    /// every bar, so this is the only way both can hold at once.
+    public func anchorsReveal(connectedDisplayUUIDs uuids: [String?]) -> Bool {
+        uuids.contains { behavior(forDisplayUUID: $0) == .alwaysShowAll }
+    }
+
+    /// Where a reveal decided on this display shows the hidden icons: its own
+    /// choice, else the Panel tab's. On a display that shows all icons it is
+    /// where a chevron click opens Always Hidden (#96).
+    public func revealTarget(forDisplayUUID uuid: String?) -> RevealTarget {
+        ownRevealTarget(forDisplayUUID: uuid) ?? hiddenIconsIn
+    }
+
+    /// A panel or a row shows the hidden icons somewhere: the Panel tab's
+    /// choice, or a display's own.
+    public var usesPanel: Bool {
+        hiddenIconsIn.panelLayout != nil
+            || displayRevealTargets.keys.contains { ownRevealTarget(forDisplayUUID: $0)?.panelLayout != nil }
+    }
+
+    /// The display's own "Show hidden icons in", when it has one.
+    public func ownRevealTarget(forDisplayUUID uuid: String?) -> RevealTarget? {
+        guard let uuid else { return nil }
+        return displayRevealTargets[uuid]
+    }
+
     // MARK: - Codable (resilient: new fields fall back to defaults instead of
     // failing the whole decode and silently resetting the user's settings)
 
@@ -515,7 +558,7 @@ public struct SettingsStore: Codable, Equatable, Sendable {
         case itemHotkeys, itemAliases
         case revealTriggers, autoRehide, rehideDelay, rehideOnClickElsewhere, revealAnimation
         case hideSystemExtras, showMediaControls, extraItems, sectionModel, separators
-        case displayTemplate, displayOverrides
+        case displayTemplate, displayOverrides, displayRevealTargets
         case notifyOnUpdates, barRightClickMenu, betaUpdates
         case statusIconStyle
         case clockClickOpensNotificationCenter, notificationCenterHotkey
@@ -550,6 +593,7 @@ public struct SettingsStore: Codable, Equatable, Sendable {
         separators = c.field([SeparatorSpec].self, .separators, defaults.separators)
         displayTemplate = c.field(DisplayBehavior.self, .displayTemplate, defaults.displayTemplate)
         displayOverrides = c.field([String: DisplayBehavior].self, .displayOverrides, defaults.displayOverrides)
+        displayRevealTargets = c.eachValue(RevealTarget.init(rawValue:), .displayRevealTargets)
         notifyOnUpdates = c.field(Bool.self, .notifyOnUpdates, defaults.notifyOnUpdates)
         betaUpdates = c.field(Bool.self, .betaUpdates, defaults.betaUpdates)
         barRightClickMenu = c.field(Bool.self, .barRightClickMenu, defaults.barRightClickMenu)
@@ -591,4 +635,26 @@ extension KeyedDecodingContainer {
     func field<T: Decodable>(_ type: T.Type, _ key: Key, _ fallback: T) -> T {
         ((try? decodeIfPresent(type, forKey: key)) ?? nil) ?? fallback
     }
+
+    /// A string-keyed map read value by value: a value that isn't a string
+    /// `make` knows drops that entry alone, where `field` would drop the
+    /// whole map over one of them.
+    func eachValue<T>(_ make: (String) -> T?, _ key: Key) -> [String: T] {
+        guard let map = try? nestedContainer(keyedBy: MapKey.self, forKey: key) else { return [:] }
+        var values: [String: T] = [:]
+        for entry in map.allKeys {
+            if let raw = try? map.decode(String.self, forKey: entry), let value = make(raw) {
+                values[entry.stringValue] = value
+            }
+        }
+        return values
+    }
+}
+
+/// Any key of a string-keyed map (`eachValue`).
+private struct MapKey: CodingKey {
+    let stringValue: String
+    init(stringValue: String) { self.stringValue = stringValue }
+    var intValue: Int? { nil }
+    init?(intValue: Int) { nil }
 }

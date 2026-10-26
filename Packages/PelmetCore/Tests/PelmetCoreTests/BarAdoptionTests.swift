@@ -310,6 +310,34 @@ struct BarAdoptionTests {
         #expect(result?.model.assignments.isEmpty == true)
     }
 
+    @Test func draggedLeftOfTheChevronOverAConcealedHiddenAdoptsIntoHidden() {
+        // No cluster on the bar to tell Hidden from Always Hidden: the side
+        // of the chevron is the gesture (Siri, 2026-10-20).
+        let result = BarAdoption.reconcile(
+            items: [(id: velja, minX: 760), (id: chevron, minX: 1000)],
+            model: SectionModel(),
+            previousZones: [:],
+            pelmetBundleID: pelmet,
+            draggedID: velja
+        )
+        #expect(result?.changed == true)
+        #expect(result?.model.assignments[velja.sectionKey] == .hidden)
+    }
+
+    @Test func draggedAlwaysHiddenIconStaysWhenNothingIsMeasured() {
+        var model = SectionModel()
+        model.assignments[velja.sectionKey] = .alwaysHidden
+        let result = BarAdoption.reconcile(
+            items: [(id: velja, minX: 760), (id: chevron, minX: 1000)],
+            model: model,
+            previousZones: [:],
+            pelmetBundleID: pelmet,
+            draggedID: velja
+        )
+        #expect(result?.changed == false)
+        #expect(result?.model.assignments[velja.sectionKey] == .alwaysHidden)
+    }
+
     /// A non-dragged zone change adopts on the second agreeing pass.
     func twoPasses(items: [(id: ItemID, minX: CGFloat?)], model: SectionModel, previousZones: [String: Section]) -> BarAdoption.Result? {
         let first = BarAdoption.reconcile(items: items, model: model, previousZones: previousZones, pelmetBundleID: pelmet)
@@ -439,6 +467,40 @@ struct BarAdoptionTests {
         #expect(result?.changed == true)
         #expect(result?.model.order[.hidden] == [figma.sectionKey, velja.sectionKey])
         #expect(result?.log.contains("adopt: hidden order reconciled from bar") == true)
+    }
+
+    @Test func aNamedDragMovesThatIconAloneAndLeavesDriftForApply() {
+        // Figma drifted left of Velja (a relaunch); the person ⌘-drags
+        // Sconce to the left end. The editor owns the order: Sconce lands
+        // beside the icon it was dropped next to (before Figma, no left
+        // neighbour), and Figma's drift is not written in (2026-10-20).
+        let sconce = ItemID(rawValue: "status:com.gab.Sconce::Item-0")
+        var model = SectionModel()
+        for id in [velja, figma, sconce] { model.assignments[id.sectionKey] = .hidden }
+        model.order[.hidden] = [velja.sectionKey, figma.sectionKey, sconce.sectionKey]
+        let result = BarAdoption.reconcile(
+            items: [
+                (id: sconce, minX: 300),
+                (id: figma, minX: 400),
+                (id: velja, minX: 500),
+                (id: chevron, minX: 1000),
+            ],
+            model: model,
+            previousZones: [velja.rawValue: .hidden, figma.rawValue: .hidden, sconce.rawValue: .hidden],
+            userDragged: true,
+            pelmetBundleID: pelmet,
+            draggedID: sconce
+        )
+        #expect(result?.model.order[.hidden] == [velja.sectionKey, sconce.sectionKey, figma.sectionKey])
+        // Unnamed, the drag folds the whole bar in, Figma's drift with it.
+        let unnamed = BarAdoption.reconcile(
+            items: [(id: sconce, minX: 300), (id: figma, minX: 400), (id: velja, minX: 500), (id: chevron, minX: 1000)],
+            model: model,
+            previousZones: [velja.rawValue: .hidden, figma.rawValue: .hidden, sconce.rawValue: .hidden],
+            userDragged: true,
+            pelmetBundleID: pelmet
+        )
+        #expect(unnamed?.model.order[.hidden] == [sconce.sectionKey, figma.sectionKey, velja.sectionKey])
     }
 
     @Test func ownItemHoldsItsModelSlotUnlessDragged() {

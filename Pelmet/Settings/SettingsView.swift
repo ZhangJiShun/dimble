@@ -149,12 +149,18 @@ struct SettingsView: View {
                             Text(appState.settingsTab.title)
                                 .font(.system(size: 22, weight: .semibold))
                             if appState.settingsTab == .menuBar {
+                                // The hint gives way first: it truncates,
+                                // its sentence is the tooltip. Squeezed, the
+                                // actions wrapped letter by letter ("Re try",
+                                // live test 2026-10-19).
                                 OverflowHint()
                                     .padding(.leading, 8)
+                                    .layoutPriority(-1)
                             }
-                            Spacer()
+                            Spacer(minLength: 8)
                             if appState.settingsTab == .menuBar {
                                 ApplyBarButton()
+                                    .fixedSize()
                             }
                         }
                         .padding(.horizontal, 28)
@@ -612,6 +618,8 @@ struct SettingRow<Control: View>: View {
     /// An orange dot before the title: "this needs you" (the sidebar's dot,
     /// carried down to the row it points at).
     private var attention = false
+    /// A control of the row's own under its title, where the caption goes.
+    private var detail: AnyView?
 
     /// Literal titles localize through the string catalog.
     init(title: LocalizedStringKey, caption: LocalizedStringKey? = nil, @ViewBuilder control: () -> Control) {
@@ -633,6 +641,12 @@ struct SettingRow<Control: View>: View {
         return row
     }
 
+    func detail<Detail: View>(@ViewBuilder _ content: () -> Detail) -> Self {
+        var row = self
+        row.detail = AnyView(content())
+        return row
+    }
+
     private var label: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -646,6 +660,7 @@ struct SettingRow<Control: View>: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            detail
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -695,7 +710,7 @@ struct SettingToggleRow: View {
     }
 }
 
-/// Seven glyphs for the menu bar icon, drawn at bar size. Picking one repaints
+/// Eight glyphs for the menu bar icon, drawn at bar size. Picking one repaints
 /// the live status item through settingsChanged().
 struct StatusIconPicker: View {
     @Binding var selection: StatusIconStyle
@@ -730,6 +745,7 @@ extension StatusIconStyle {
         case .grid: "Grid"
         case .panel: "Panel"
         case .dot: "Dot"
+        case .smallDot: "Small Dot"
         }
     }
 }
@@ -1275,6 +1291,16 @@ private struct DisplayRow: View {
 
     private var behavior: DisplayBehavior { appState.settings.behavior(forDisplayUUID: uuid) }
 
+    /// The display's own "Show hidden icons in"; nil follows the Panel tab.
+    private var revealIn: Binding<RevealTarget?> {
+        Binding(
+            get: { uuid.flatMap { appState.settings.displayRevealTargets[$0] } },
+            set: { target in
+                guard let uuid else { return }
+                appState.panelPresenter.setTarget(target, forDisplayUUID: uuid)
+            })
+    }
+
     var body: some View {
         SettingRow(
             verbatim: screen.localizedName,
@@ -1302,6 +1328,21 @@ private struct DisplayRow: View {
                     (DisplayBehavior.collapse, LocalizedStringKey("Hides icons")),
                     (DisplayBehavior.alwaysShowAll, LocalizedStringKey("Shows all icons")),
                 ])
+            }
+        }
+        .detail {
+            // The display's own "Show hidden icons in" (#88). One that shows
+            // all icons keeps it: its chevron click opens Always Hidden (#96).
+            if uuid != nil {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("Show hidden icons in")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    PelmetMenuPicker(selection: revealIn, options: [
+                        (nil, "Same as Panel tab"), (.menuBar, "Menu bar"), (.panel, "Panel"), (.row, "Row"),
+                    ], borderless: true, accent: true)
+                    .fixedSize()
+                }
             }
         }
     }

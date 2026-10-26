@@ -125,6 +125,13 @@ final class ExtrasManager {
     /// attached invisibly for the length of an Apply pass so they have a
     /// slot to drag — see `attachForApply`.
     private var attachedForApply: Set<UUID> = []
+    /// Extras out of the bar to make room for the chevron behind Apple's «
+    /// (#81), with the width each gave back, in the order they went.
+    /// Runtime only: `apply` reads them as down until they come back.
+    private var yielded: [(id: UUID, width: CGFloat)] = []
+    /// The latest extra back from making room, with the width it went out
+    /// at: `yieldRestoredAgain` takes it out again when it didn't fit.
+    private var lastRestored: (id: UUID, width: CGFloat)?
 
     init(appState: AppState) {
         self.appState = appState
@@ -372,6 +379,7 @@ final class ExtrasManager {
         revealed: Set<PelmetCore.Section>,
         systemCameraPillVisible: Bool
     ) {
+        yielded.removeAll { specs[$0.id] == nil }
         for (id, item) in items {
             guard let spec = specs[id], !attachedForApply.contains(id) else { continue }
             let section = model.section(of: Self.itemID(for: spec))
@@ -502,8 +510,13 @@ final class ExtrasManager {
                 }
                 updateFocusGlyph(item, spec: spec)
                 lastFocusActive = active
-            case .shortcut, .userSwitching, .shortcutsMenu, .siri:
+            case .shortcut, .userSwitching, .shortcutsMenu, .siri, .quickNote:
                 break
+            }
+            if let index = yielded.firstIndex(where: { $0.id == id }) {
+                // Its own rule brings it out (a timer started, a Focus came
+                // on): an indicator never stays out for the chevron.
+                if ruleForcesShow(spec) { yielded.remove(at: index) } else { visible = false }
             }
             setVisible(visible, for: id, item: item)
             // A hidden glyph keeps its last frame and stops ticking.
@@ -542,11 +555,15 @@ final class ExtrasManager {
     /// found its slot at the next camera-on edge (2026-09-20). For the pass,
     /// every idle extra joins the layout at alpha 0 (the agent gives it the
     /// slot it remembers), gets dragged like any icon, and leaves again in
-    /// `detachAfterApply`; its next real entry lands at the new slot.
-    func attachForApply() -> [ItemID] {
+    /// `detachAfterApply`; its next real entry lands at the new slot. Only
+    /// the extras the edits `touch` join: each one is a blank slot while it
+    /// is there. Never one out to make room for the chevron: back for the
+    /// pass, it crowded the bar it left (live test, 2026-10-19 20:29).
+    func attachForApply(touched: (ItemID) -> Bool) -> [ItemID] {
         var attached: [ItemID] = []
-        for (id, item) in items where lastVisible[id] != true && !preattached.contains(id) {
-            guard let spec = specs[id] else { continue }
+        for (id, item) in items where lastVisible[id] != true && !preattached.contains(id)
+            && !yielded.contains(where: { $0.id == id }) {
+            guard let spec = specs[id], touched(Self.itemID(for: spec)) else { continue }
             StatusItemFader.attach(item, shownLength: Self.shownLength(for: spec))
             attachedForApply.insert(id)
             attached.append(Self.itemID(for: spec))
@@ -573,7 +590,7 @@ final class ExtrasManager {
         for (id, item) in items {
             guard let spec = specs[id], lastVisible[id] != true else { continue }
             switch spec.kind {
-            case .airdrop, .shortcut, .userSwitching, .shortcutsMenu, .siri: break
+            case .airdrop, .shortcut, .userSwitching, .shortcutsMenu, .siri, .quickNote: break
             case .timer:
                 // Counting: already in the bar on its own.
                 guard !(pelmetTimer?.isActive ?? false) else { continue }
@@ -630,6 +647,82 @@ final class ExtrasManager {
             shownAlpha: 1,
             stillCurrent: stillCurrent
         )
+    }
+
+    // MARK: Making room for the chevron (#81)
+
+    /// The extras out of the bar for the chevron, in the order they went.
+    var yieldedKeys: [ItemID] {
+        yielded.compactMap { specs[$0.id].map(Self.itemID(for:)) }
+    }
+
+    /// Takes the extra nearest the chevron out of the bar: one in Visible,
+    /// up on its section alone. Indicators keep their place (a camera that
+    /// is on, a counting timer), as does one brought out alone. Its key, nil
+    /// when none can go.
+    func yieldOne() -> ItemID? {
+        let next = items.compactMap { id, item -> (id: UUID, frame: NSRect)? in
+            guard canYield(id), let frame = item.button?.window?.frame, frame.width > 0 else { return nil }
+            return (id, frame)
+        }.min { $0.frame.minX < $1.frame.minX }
+        guard let next, let spec = specs[next.id] else { return nil }
+        yielded.append((next.id, next.frame.width))
+        PelmetLog.log("extras: \(spec.itemTitle) out to make room for the chevron (\(Int(next.frame.width))pt)")
+        applyCurrent()
+        return Self.itemID(for: spec)
+    }
+
+    /// Up in Visible on its section alone, and not out already: an
+    /// indicator, or one brought out alone, keeps its place.
+    private func canYield(_ id: UUID) -> Bool {
+        guard let appState, let spec = specs[id], lastVisible[id] == true, !shownAlone.contains(id),
+              !yielded.contains(where: { $0.id == id }), spec.kind != .cameraMicIndicator,
+              !ruleForcesShow(spec) else { return false }
+        return appState.settings.sectionModel.section(of: Self.itemID(for: spec)) == .visible
+    }
+
+    /// Out on its own rule whatever its section: a counting timer, a Focus
+    /// or a backup "when active". Such an extra never yields.
+    private func ruleForcesShow(_ spec: ExtraItemSpec) -> Bool {
+        switch spec.kind {
+        case .timer: return pelmetTimer?.isActive ?? false
+        case .focus: return spec.resolvedShowRule == .whenActive && focusStatus?.active != nil
+        case .timeMachine: return spec.resolvedShowRule == .whenActive && (timeMachine?.status.running ?? false)
+        default: return false
+        }
+    }
+
+    /// Brings back the latest extra out of the bar that fits in `room`
+    /// (`ChevronTrap.restorable`). Its key, nil when none fits.
+    func restoreYielded(room: CGFloat, failedRoom: CGFloat?) -> ItemID? {
+        guard let index = ChevronTrap.restorable(widths: yielded.map(\.width), room: room, failedRoom: failedRoom),
+              let spec = specs[yielded[index].id] else { return nil }
+        lastRestored = yielded.remove(at: index)
+        PelmetLog.log("extras: \(spec.itemTitle) back, the chevron has room (\(Int(room))pt)")
+        applyCurrent()
+        return Self.itemID(for: spec)
+    }
+
+    /// Takes the extra that just came back out again: the bar had no room
+    /// for it after all (`room` was short). Its key, nil when it can't go
+    /// (`canYield`: a timer that started counting meanwhile stays).
+    func yieldRestoredAgain(shortRoom room: CGFloat) -> ItemID? {
+        guard let restored = lastRestored, canYield(restored.id), let spec = specs[restored.id] else { return nil }
+        lastRestored = nil
+        yielded.append(restored)
+        PelmetLog.log("extras: \(spec.itemTitle) out again, \(Int(room))pt was short")
+        applyCurrent()
+        return Self.itemID(for: spec)
+    }
+
+    /// No chevron left to make room for (its icon is off, the bar has no
+    /// notch to measure the room by): every extra comes back.
+    func restoreAllYielded() {
+        lastRestored = nil
+        guard !yielded.isEmpty else { return }
+        yielded.removeAll()
+        PelmetLog.log("extras: back from making room for the chevron")
+        applyCurrent()
     }
 
     private func applyCurrent() {
@@ -718,6 +811,7 @@ final class ExtrasManager {
         case .timeMachine: ExtraGlyph.timeMachineSymbol
         case .siri: "siri"
         case .focus: "moon.fill"
+        case .quickNote: "note.text"
         }
     }
 
@@ -954,7 +1048,7 @@ final class ExtrasManager {
         case .timer: updateTimerGlyph(item, spec: spec)
         case .timeMachine: updateTimeMachineGlyph(item, spec: spec)
         case .focus: updateFocusGlyph(item, spec: spec)
-        case .shortcut, .appLauncher, .userSwitching, .shortcutsMenu, .siri: break
+        case .shortcut, .appLauncher, .userSwitching, .shortcutsMenu, .siri, .quickNote: break
         }
     }
 
@@ -1136,7 +1230,7 @@ final class ExtrasManager {
             return rightClick ? .onBar : .nothing
         case .cameraMicIndicator:
             return rightClick ? .nothing : .live
-        case .airdrop, .shortcut:
+        case .airdrop, .shortcut, .quickNote:
             return .nothing
         case .timer:
             return pelmetTimer?.state == .done && !rightClick ? .nothing : .onBar
@@ -1189,6 +1283,8 @@ final class ExtrasManager {
             }
         case .airdrop:
             openAirDrop()
+        case .quickNote:
+            QuickNote.open()
         case .shortcut:
             if let name = spec.shortcutName {
                 runShortcut(named: name)
@@ -1216,12 +1312,14 @@ final class ExtrasManager {
         case .siri:
             if rightClick {
                 let menu = NSMenu()
+                let talk = NSMenuItem(title: String(localized: "Talk to Siri"), action: #selector(talkToSiri), keyEquivalent: "")
+                talk.target = self
                 let settings = NSMenuItem(title: String(localized: "Siri Settings…"), action: #selector(siriSettings), keyEquivalent: "")
                 settings.target = self
-                menu.items = [settings]
+                menu.items = [talk, .separator(), settings]
                 popUp(menu, on: statusItem.value)
             } else {
-                Siri.activate()
+                Siri.tap()
             }
         case .focus:
             if rightClick {
@@ -1481,6 +1579,7 @@ final class ExtrasManager {
     @objc private func skipBackup() { timeMachine?.skipBackup() }
     @objc private func browseBackups() { TimeMachineBackup.browseBackups() }
     @objc private func timeMachineSettings() { TimeMachineBackup.openSettings() }
+    @objc private func talkToSiri() { Siri.talk() }
     @objc private func siriSettings() { Siri.openSettings() }
     @objc private func focusSettings() { ControlCenterFocus.openSettings() }
 

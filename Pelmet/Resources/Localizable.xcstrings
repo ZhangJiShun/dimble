@@ -8237,64 +8237,6 @@
         }
       }
     },
-    "Discard": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verwerfen"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Descartar"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Annuler"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Annulla"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "破棄"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "취소"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Descartar"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Отменить"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "放弃"
-          }
-        }
-      }
-    },
     "Dismiss": {
       "localizations": {
         "de": {
@@ -9973,64 +9915,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "清除记录"
-          }
-        }
-      }
-    },
-    "Forget the pending order changes; the editor shows the bar as it is": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ausstehende Reihenfolge-Änderungen verwerfen; der Editor zeigt die Leiste wie sie ist"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Olvidar los cambios de orden pendientes; el editor muestra la barra tal cual"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Oublier les changements d’ordre en attente ; l’éditeur montre la barre telle quelle"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scarta le modifiche d’ordine in sospeso; l’editor mostra la barra com’è"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保留中の並び替えを破棄し、エディタは現在のバーをそのまま表示します"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "대기 중인 순서 변경을 잊고 편집기는 현재 막대를 그대로 표시합니다"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Esquecer as alterações de ordem pendentes; o editor mostra a barra como está"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Забыть ожидающие изменения порядка; редактор показывает строку как есть"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "放弃待应用的顺序更改；编辑器按当前菜单栏显示"
           }
         }
       }
@@ -13047,6 +12931,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "登录窗口…"
+          }
+        }
+      }
+    },
+    "Made room for the chevron": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Platz für den Pfeil geschaffen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se hizo sitio para el chevrón"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place faite pour le chevron"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fatto spazio per la freccia"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "シェブロンのためにスペースを空けました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "화살표를 위한 공간을 만들었습니다"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espaço liberado para a seta"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Место для стрелки освобождено"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已为箭头腾出空间"
           }
         }
       }
@@ -16995,6 +16937,64 @@
         }
       }
     },
+    "Quick Note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schnelle Notiz"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nota rápida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Note rapide"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nota rapida"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クイックメモ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "빠른 메모"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nota rápida"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Быстрая заметка"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "快速备忘录"
+          }
+        }
+      }
+    },
     "Quit %@": {
       "localizations": {
         "de": {
@@ -18677,6 +18677,64 @@
         }
       }
     },
+    "Same as Panel tab": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wie im Tab „Panel“"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Igual que la pestaña Panel"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comme l’onglet Panneau"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Come la scheda Pannello"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「パネル」タブと同じ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "패널 탭과 같게"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Igual à aba Painel"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Как на вкладке «Панель»"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "与“面板”标签页相同"
+          }
+        }
+      }
+    },
     "Screen Recording": {
       "localizations": {
         "de": {
@@ -19427,6 +19485,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "分隔符另起一行"
+          }
+        }
+      }
+    },
+    "Set per display in [Settings › Displays](dimble-settings:displays).": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pro Display festlegen unter [Einstellungen › Displays](dimble-settings:displays)."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se ajusta por pantalla en [Ajustes › Pantallas](dimble-settings:displays)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réglable par écran dans [Réglages › Écrans](dimble-settings:displays)."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si imposta per schermo in [Impostazioni › Schermi](dimble-settings:displays)."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ディスプレイごとの設定は[設定 › ディスプレイ](dimble-settings:displays)で。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "디스플레이별 설정은 [설정 › 디스플레이](dimble-settings:displays)에서 합니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajuste por tela em [Ajustes › Telas](dimble-settings:displays)."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для каждого монитора — в [Настройки › Мониторы](dimble-settings:displays)."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可在[设置 › 显示器](dimble-settings:displays)中按显示器设置。"
           }
         }
       }
@@ -20997,6 +21113,64 @@
         }
       }
     },
+    "Small Dot": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kleiner Punkt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punto pequeño"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Petit point"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punto piccolo"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "小さいドット"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작은 점"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ponto pequeno"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Маленькая точка"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "小圆点"
+          }
+        }
+      }
+    },
     "Smaller updates, more often. Stable releases roll them up every week or two.": {
       "localizations": {
         "de": {
@@ -21457,6 +21631,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "开始"
+          }
+        }
+      }
+    },
+    "Start a Quick Note in a click.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starte eine Schnelle Notiz mit einem Klick."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crea una Nota rápida con un clic."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lancez une Note rapide en un clic."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avvia una Nota rapida con un clic."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワンクリックでクイックメモを開始。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "한 번의 클릭으로 빠른 메모를 시작하세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inicie uma Nota rápida com um clique."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Создайте быструю заметку одним щелчком."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一键开始快速备忘录。"
           }
         }
       }
@@ -22215,6 +22447,64 @@
         }
       }
     },
+    "Talk to Siri": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Siri sprechen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hablar con Siri"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parler à Siri"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parla con Siri"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Siriに話しかける"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Siri에게 말하기"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falar com a Siri"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Говорить с Siri"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "与 Siri 对话"
+          }
+        }
+      }
+    },
     "Tell a friend": {
       "localizations": {
         "de": {
@@ -22385,6 +22675,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "就这么简单。"
+          }
+        }
+      }
+    },
+    "The chevron doesn't fit": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Pfeil passt nicht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El chevrón no cabe"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le chevron ne tient pas"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La freccia non ci sta"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "シェブロンが収まりません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "화살표가 들어가지 않습니다"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A seta não cabe"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стрелка не помещается"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "箭头放不下"
           }
         }
       }
@@ -26097,6 +26445,122 @@
           "stringUnit": {
             "state": "translated",
             "value": "菜单栏已满：%lld 个图标在有空间之前会留在 macOS 的 « 后面。Dimble 不会移动它们。"
+          }
+        }
+      }
+    },
+    "Your menu bar is full: Dimble took some of its own icons out so the chevron stays on the bar. They come back when there's room.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deine Menüleiste ist voll: Dimble hat einige eigene Symbole herausgenommen, damit der Pfeil in der Leiste bleibt. Sie kommen zurück, sobald wieder Platz ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu barra de menús está llena: Dimble quitó algunos de sus propios iconos para que el chevrón siga en la barra. Vuelven cuando haya sitio."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre barre des menus est pleine : Dimble a retiré certaines de ses propres icônes pour que le chevron reste dans la barre. Elles reviennent dès qu’il y a de la place."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La barra dei menu è piena: Dimble ha tolto alcune delle sue icone perché la freccia resti nella barra. Tornano quando c’è spazio."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メニューバーがいっぱいです：シェブロンをバーに残すため、Dimble が自分のアイコンをいくつか外しました。空きができると戻ります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메뉴 막대가 가득 찼습니다: 화살표가 막대에 남도록 Dimble이 자체 아이콘 일부를 뺐습니다. 공간이 생기면 돌아옵니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sua barra de menus está cheia: o Dimble tirou alguns dos próprios ícones para a seta continuar na barra. Eles voltam quando houver espaço."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Строка меню заполнена: Dimble убрал часть своих значков, чтобы стрелка осталась в строке. Они вернутся, когда появится место."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "菜单栏已满：Dimble 移走了自己的一些图标，让箭头留在菜单栏上。有空间时它们会回来。"
+          }
+        }
+      }
+    },
+    "Your menu bar is full: the chevron sits behind macOS's « until there's room. Move an icon to Hidden to bring it back.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deine Menüleiste ist voll: Der Pfeil bleibt hinter dem « von macOS, bis wieder Platz ist. Verschiebe ein Symbol nach „Ausgeblendet“, um ihn zurückzuholen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu barra de menús está llena: el chevrón queda detrás del « de macOS hasta que haya sitio. Mueve un icono a Ocultos para recuperarlo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre barre des menus est pleine : le chevron reste derrière le « de macOS jusqu’à ce qu’il y ait de la place. Déplacez une icône dans Masqués pour le faire revenir."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La barra dei menu è piena: la freccia resta dietro il « di macOS finché non c’è spazio. Sposta un’icona in Nascosti per riportarla."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メニューバーがいっぱいです：空きができるまで、シェブロンは macOS の « の後ろにあります。アイコンを1つ「非表示」に移すと戻ります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메뉴 막대가 가득 찼습니다: 공간이 생길 때까지 화살표는 macOS의 « 뒤에 남습니다. 아이콘 하나를 숨김으로 옮기면 돌아옵니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sua barra de menus está cheia: a seta fica atrás do « do macOS até haver espaço. Mova um ícone para Ocultos para trazê-la de volta."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Строка меню заполнена: стрелка остаётся за « macOS, пока не появится место. Переместите один значок в «Скрытые», чтобы вернуть её."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "菜单栏已满：在有空间之前，箭头会留在 macOS 的 « 后面。将一个图标移到“隐藏”即可让它回来。"
           }
         }
       }

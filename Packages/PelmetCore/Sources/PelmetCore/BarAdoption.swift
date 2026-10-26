@@ -320,7 +320,12 @@ public enum BarAdoption {
                 // it reads "between the clusters") NEVER earns a baseline, so
                 // the zone-change rule alone could never move the leftmost
                 // hidden item into Always Hidden (Sconce, 2026-09-05).
-                guard confident else { continue }
+                // Left of the chevron with neither cluster measured (Hidden
+                // concealed under the drop) the section is a guess, the side
+                // is not: Hidden, the one a collapsed bar lets you drop into.
+                // Refused, Siri stayed Visible and Apply dragged it back
+                // across the « (first ⌘-drag after launch, 2026-10-20).
+                guard confident || concealableSide == true else { continue }
             } else if chevronDragged {
                 // A reading on the far side of a boundary the user just
                 // moved is the change itself; no baseline needed. Which
@@ -376,10 +381,18 @@ public enum BarAdoption {
         }
         for (section, order) in model.order {
             var newOrder = order.filter { model.section(of: $0) == section }
-            let liveSlots = newOrder.indices.filter { liveX[newOrder[$0]] != nil }
-            let sortedLive = liveSlots.map { newOrder[$0] }
-                .sorted { liveX[$0, default: .infinity] < liveX[$1, default: .infinity] }
-            for (offset, slot) in liveSlots.enumerated() { newOrder[slot] = sortedLive[offset] }
+            // The editor owns the order (2026-10-20): a drag Pelmet named
+            // moves that icon alone, below. The others keep their stored
+            // slots, so what drifted since (Wi-Fi among Hidden, a relaunch
+            // macOS put elsewhere) stays drift for Apply instead of being
+            // written into the editor. An unnamed drag still folds the bar
+            // in: the bar is all there is of the person's move.
+            if draggedID == nil {
+                let liveSlots = newOrder.indices.filter { liveX[newOrder[$0]] != nil }
+                let sortedLive = liveSlots.map { newOrder[$0] }
+                    .sorted { liveX[$0, default: .infinity] < liveX[$1, default: .infinity] }
+                for (offset, slot) in liveSlots.enumerated() { newOrder[slot] = sortedLive[offset] }
+            }
             // The icon the user ⌘-dragged goes where they dropped it among
             // all its neighbours. Re-sorted among the others only, a drag
             // past one of Pelmet's own items changed no order, nothing was

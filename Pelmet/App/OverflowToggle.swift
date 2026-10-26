@@ -66,13 +66,71 @@ enum OverflowToggle {
         let expanded: Bool
     }
 
-    /// Sweep the primary band through the agent's app element. ~3pt steps
-    /// cannot skip the ~17pt button; nil when the bar does not overflow.
+    /// The « by its label among the agent's own extras, else a sweep of the
+    /// primary band. Nil when the bar does not overflow: the « is on the
+    /// bar only while something is behind it (measured 2026-10-19, #81).
     nonisolated static func find() -> Toggle? {
-        guard let screen = NSScreen.screens.first,
-              let agent = NSRunningApplication.runningApplications(withBundleIdentifier: PelmetBundle.agentID).first
+        guard let agent = NSRunningApplication.runningApplications(withBundleIdentifier: PelmetBundle.agentID).first
         else { return nil }
         let app = AXUIElementCreateApplication(agent.processIdentifier)
+        return listed(in: app).first ?? sweep(app)
+    }
+
+    /// Whether the « is open now, by its label only: the rehide reads it on
+    /// the main thread, where the sweep's 200-odd hit-tests don't belong.
+    /// Nil when the bar has none.
+    nonisolated static func isExpanded() -> Bool? {
+        listedToggle()?.expanded
+    }
+
+    /// The « by its label only, nil when the bar has none. The sweep is for
+    /// a pass; a read on every walk or every missed drag stays to the label
+    /// (the sweep is about 230 AX hit-tests, review 2026-10-19).
+    nonisolated static func listedToggle() -> Toggle? {
+        guard let agent = NSRunningApplication.runningApplications(withBundleIdentifier: PelmetBundle.agentID).first
+        else { return nil }
+        let app = AXUIElementCreateApplication(agent.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 0.25)
+        return listed(in: app).first
+    }
+
+    /// Every « the agent lists, by its label: with a bar on each display,
+    /// the first listed can be another display's (review, 2026-10-20).
+    nonisolated static func listedToggles() -> [Toggle] {
+        guard let agent = NSRunningApplication.runningApplications(withBundleIdentifier: PelmetBundle.agentID).first
+        else { return [] }
+        let app = AXUIElementCreateApplication(agent.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 0.25)
+        return listed(in: app, all: true)
+    }
+
+    /// The agent lists the « with its extras. The sweep below stops 200pt
+    /// short of the right edge, and on a bar with few icons the « sits
+    /// nearer the clock than that (x=1614 on the 1800pt built-in, #81).
+    nonisolated private static func listed(in app: AXUIElement, all: Bool = false) -> [Toggle] {
+        var barV: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXExtrasMenuBarAttribute as CFString, &barV) == .success,
+              let barV, CFGetTypeID(barV) == AXUIElementGetTypeID() else { return [] }
+        // A timeout set on the app element stays on it: the elements read
+        // from it take the default 6s each.
+        let bar = barV as! AXUIElement
+        AXUIElementSetMessagingTimeout(bar, 0.25)
+        var kidsV: CFTypeRef?
+        AXUIElementCopyAttributeValue(bar, kAXChildrenAttribute as CFString, &kidsV)
+        var toggles: [Toggle] = []
+        for kid in (kidsV as? [AXUIElement]) ?? [] {
+            AXUIElementSetMessagingTimeout(kid, 0.25)
+            guard let expanded = state(of: kid) else { continue }
+            toggles.append(Toggle(element: kid, frame: currentFrame(of: kid) ?? .zero, expanded: expanded))
+            if !all { break }
+        }
+        return toggles
+    }
+
+    /// Sweep the primary band through the agent's app element. ~3pt steps
+    /// cannot skip the ~17pt button.
+    nonisolated private static func sweep(_ app: AXUIElement) -> Toggle? {
+        guard let screen = NSScreen.screens.first else { return nil }
         var x = screen.frame.midX
         while x < screen.frame.maxX - 200 {
             defer { x += 3 }
@@ -82,18 +140,7 @@ enum OverflowToggle {
             AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &roleV)
             guard roleV as? String == "AXButton" else { continue }
             guard let expanded = state(of: el) else { continue }
-            var frame = CGRect.zero
-            var posV: CFTypeRef?
-            var sizeV: CFTypeRef?
-            if AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posV) == .success,
-               AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeV) == .success {
-                var p = CGPoint.zero
-                var s = CGSize.zero
-                AXValueGetValue(posV as! AXValue, .cgPoint, &p)
-                AXValueGetValue(sizeV as! AXValue, .cgSize, &s)
-                frame = CGRect(origin: p, size: s)
-            }
-            return Toggle(element: el, frame: frame, expanded: expanded)
+            return Toggle(element: el, frame: currentFrame(of: el) ?? .zero, expanded: expanded)
         }
         return nil
     }

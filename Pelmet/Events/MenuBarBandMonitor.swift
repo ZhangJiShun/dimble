@@ -369,7 +369,8 @@ final class MenuBarBandMonitor {
             let action = DisplayCrossing.action(
                 from: lastDisplayUUID, to: displayUUID,
                 behavior: appState.settings.behavior(forDisplayUUID: displayUUID),
-                launched: appState.launchBaselineApplied, revealed: appState.isRevealed
+                launched: appState.launchBaselineApplied, revealed: appState.isRevealed,
+                anchored: appState.transitions.anchored
             )
             lastDisplayUUID = displayUUID
             switch action {
@@ -498,7 +499,7 @@ final class MenuBarBandMonitor {
     /// pointer. Nil when nothing holds. One window list per verdict: the
     /// old Bool + diagnostic-twin pair walked the list twice per deferred
     /// reveal (perf audit 2026-09-15, fix 4b).
-    enum DeferReason: String { case band, active, elevated, drag }
+    enum DeferReason: String { case band, active, elevated, drag, overflow }
 
     func rehideDeferReason() -> DeferReason? {
         if pointerInBand { return .band }
@@ -506,7 +507,34 @@ final class MenuBarBandMonitor {
         // Pelmet frontmost only holds the bar for the layout editor and the
         // onboarding demo — the General tab is not a reason to stay revealed.
         if NSApp.isActive, appState?.editorHoldsBar == true || OnboardingController.shared.isPresented { return .active }
-        return pointerIsOverElevatedWindow() ? .elevated : nil
+        if pointerIsOverElevatedWindow() { return .elevated }
+        // Apple's « open on hidden icons that didn't fit: it draws them left
+        // of the notch, and the notch is off the band, so the way there read
+        // as leaving the bar and they concealed under the pointer (#81, live
+        // test 2026-10-19). Held while the pointer crosses the notch only: a
+        // « left open must not hold the reveal once the pointer is off the
+        // bar, and its icons, drawn, no longer read as behind it.
+        if let appState, appState.isRevealed, pointerOnNotch(),
+           OverflowToggle.isExpanded() == true { return .overflow }
+        // A chevron click on a display that shows all icons opens Always
+        // Hidden there (#96): held while the pointer stays on that bar, as
+        // on a hiding one. `pointerInBand` never tracks such a display, it
+        // reveals nothing on hover (live, 2026-10-20: concealed 0.8s in).
+        if let appState, appState.isRevealed, pointerOnShowAllBar(appState) { return .band }
+        return nil
+    }
+
+    private func pointerOnShowAllBar(_ appState: AppState) -> Bool {
+        let location = NSEvent.mouseLocation
+        guard let geometry = screenGeometry(containing: location) else { return false }
+        return appState.settings.behavior(forDisplayUUID: geometry.uuid) == .alwaysShowAll
+            && NSMouseInRect(location, geometry.band, false)
+    }
+
+    private func pointerOnNotch() -> Bool {
+        let location = NSEvent.mouseLocation
+        guard let geometry = screenGeometry(containing: location), let notch = geometry.notch else { return false }
+        return NSMouseInRect(location, geometry.band, false) && location.x > notch.minX && location.x < notch.maxX
     }
 
     /// Deliberately narrow: only visible, menu/popover-sized windows at
@@ -873,6 +901,12 @@ final class MenuBarBandMonitor {
     /// section's leftmost live icon, and with nothing in Visible either it
     /// falls back to the pinned pair.
     private func isPastRevealTriggerZone(_ point: NSPoint, on screen: NSScreen) -> Bool {
+        // The chevron behind Apple's « on a display that reveals in the bar:
+        // the bar has no room for the hidden icons either, and a hover by the
+        // notch only flickered them behind the « (#81, live test). A panel
+        // or a row still opens from the zone.
+        if let appState, appState.chevronTrapToggle != nil,
+           appState.settings.revealTarget(forDisplayUUID: screen.displayUUIDString) == .menuBar { return true }
         guard let bound = revealTriggerMaxX() ?? pinnedZoneMinX() else { return false }
         return isAtOrRight(of: bound, point, on: screen)
     }
@@ -880,6 +914,18 @@ final class MenuBarBandMonitor {
     /// Main-display x past which the reveal triggers stop: the chevron's
     /// right edge, else the leftmost live icon assigned to Visible.
     private func revealTriggerMaxX() -> CGFloat? {
+        // Behind Apple's « the chevron's window stays parked on the «, which
+        // put the « inside the zone: a hover there revealed every hidden icon
+        // straight behind it (#81). The triggers stop short of it, a pointer
+        // resting 1pt left of its frame on the way in still revealed.
+        if let toggle = appState?.chevronTrapToggle {
+            // A global x: as a main-display x, the way `liveChevronMaxX`
+            // reads the chevron (review, 2026-10-19).
+            let x = toggle.minX - 8
+            guard let geometry = screenGeometry.first(where: { x >= $0.frame.minX && x < $0.frame.maxX }),
+                  let primary = screenGeometry.first else { return x }
+            return primary.frame.maxX - (geometry.frame.maxX - x)
+        }
         guard let appState, let items = appState.snapshot?.items,
               let primaryMaxX = NSScreen.screens.first?.frame.maxX else { return nil }
         let live = items.compactMap { item -> (id: ItemID, frame: CGRect)? in
@@ -901,7 +947,8 @@ final class MenuBarBandMonitor {
 
     /// The drawn chevron's right edge as a main-display x (the bar repeats
     /// on every screen at the same right inset), nil when it isn't in a
-    /// screen's band (icon off, behind Apple's «, not placed yet).
+    /// screen's band (icon off, not placed yet). Behind Apple's « it stays
+    /// in the band, parked on the « (#81).
     /// On the per-move path: the screens come from the cache, the main
     /// display first as in `NSScreen.screens`.
     private func liveChevronMaxX() -> CGFloat? {

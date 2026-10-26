@@ -73,7 +73,7 @@ enum SettingsIndex {
                     ["now playing", "camera", "airdrop", "focus", "timer", "collateral"]),
 
             panel("hiddenIconsIn", String(localized: "Show hidden icons in"),
-                  ["panel", "grid", "row", "notch", "overflow", "dropdown", "tray", "layout"]),
+                  ["panel", "grid", "row", "notch", "overflow", "dropdown", "tray", "layout", "per display", "monitor", "external"]),
             panel("panelStyle", String(localized: "Style"),
                   ["compact", "tiles", "list", "tight", "layout", "look", "panel"]),
             panel("panelNames", String(localized: "Show names"),

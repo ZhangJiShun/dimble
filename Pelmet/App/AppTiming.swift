@@ -99,6 +99,14 @@ enum AppTiming {
     /// activation, Space switch): a Space switch animates ~0.5s. A mouse-up
     /// is checked at once — the window is already where the drag left it.
     static let backdropSettle: TimeInterval = 0.6
+    /// A held picture's backdrop check waits this long after the last
+    /// signal: a click's check ran before the clicked app raised its window,
+    /// and the activation's check `backdropSettle` on retook every held bar
+    /// again (77 of 427 retakes within 2s of the one before, log to
+    /// 2026-10-25). Longer than `backdropSettle`, so that check lands inside
+    /// the wait and restarts it: at 0.3s a Stage Manager switch still filmed
+    /// twice, 0.63s apart (live, 3 displays, 2026-10-25).
+    static let heldBackdropSettle: TimeInterval = backdropSettle + 0.1
     /// Style signatures (2026-09-08): the agent's own reveal slide is ~300ms
     /// and its conceal fade ~150–230ms; these sit clearly apart from both.
     /// Fade: the empty-bar cover's crossfade on reveal, the opaque strip's
@@ -122,6 +130,13 @@ enum AppTiming {
     /// Minimum time the empty-bar cover stays over a conceal: the agent's
     /// own fade of the concealed items runs ~300ms past the swap.
     static let exitCoverHold: TimeInterval = 0.42
+    /// How long another display's bar stays under its empty-bar picture
+    /// while a bar reveal is out (#88) before it gives up and shows the
+    /// icons: past this the picture risks a stale wallpaper or backdrop.
+    /// Anchored (#88), a held picture is the bar for as long as a display
+    /// that shows all icons is connected: refreshed, not timed out.
+    static let anchoredBarCeiling: TimeInterval = 86_400
+    static let heldBarCeiling: TimeInterval = 600
     /// Revealed-strip snapshot (taken at reveal settle) painted at once on the
     /// next Instant/Fade reveal. Long-lived: engine item changes invalidate it
     /// explicitly; the cap only guards wallpaper/appearance drift.
@@ -167,6 +182,9 @@ enum AppTiming {
     /// this much quiet, bounded so a restless pointer still gets the
     /// shielded drag rather than a pass that never starts.
     static let applyIdleGap: TimeInterval = 1.5
+    /// Drags in a row that miss, with the « on the bar, before a pass
+    /// stops: each costs about 2s of the user's pointer (#81).
+    static let applyOverflowMissLimit = 2
     static let applyIdleMaxWait: TimeInterval = 8
     /// The same wait in a quiet pass, which goes on shielded after it.
     static let quietApplyIdleMaxWait: TimeInterval = 0.5
@@ -190,6 +208,15 @@ enum AppTiming {
     static let groupingMaxWait: Duration = .seconds(6)
     /// An NSMenu fades for a beat after its tracking ends.
     static let groupingMenuHold: TimeInterval = 1
+    /// The editor owns the order (M3): drift must read the same for this
+    /// long before the keeper moves it, so an app relaunching or a bar
+    /// still reflowing is not chased mid-flight.
+    static let driftSettle: Duration = .seconds(10)
+    /// …and passes are this far apart: an app that keeps re-placing its
+    /// icon can't start a drag storm. Two tries per icon and stored order
+    /// bound it too (M0 on Gab's bar, 2026-10-20: drift changed 5 times in
+    /// 2 hours).
+    static let driftCooldown: Duration = .seconds(120)
     /// How long the Apply button keeps its number over a raw count of 0
     /// while order edits are pending (`ApplyCountHold`). The dips measured
     /// 100–550ms before a walk read them back; a reveal's lasted 126ms
@@ -219,6 +246,12 @@ enum AppTiming {
     /// apps build their tray ~20s in).
     static let relaunchAdoptionDelay: Duration = .seconds(3)
     static let relaunchAdoptionRetry: Duration = .seconds(15)
+    /// Wake, unlock or a display change → is the chevron still on a bar
+    /// (#26)? The walk is back ~200ms after an unlock, and the wait leaves
+    /// the agent time to re-host what it will. A missing chevron gets one
+    /// more look before it's re-hosted.
+    static let chevronHostCheckDelay: Duration = .seconds(4)
+    static let chevronHostConfirmDelay: Duration = .seconds(3)
     /// « expansion → re-measure: the trapped items reflow in left of the
     /// notch and the visible run shifts (~38pt) before frames are true.
     static let overflowExpandSettle: Duration = .milliseconds(700)
