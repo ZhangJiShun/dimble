@@ -56,6 +56,8 @@ enum SettingsIndex {
                      ["gap", "padding", "spacing", "tight", "wide"]),
             behavior("hoverReveal", String(localized: "Reveal on hover"),
                      ["hover", "pointer", "mouse", "hands-free", "delay", "wait"]),
+            behavior("hoverScope", String(localized: "Hover trigger area"),
+                     ["hover", "icon only", "trigger", "area", "scope", "悬停", "图标", "触发范围"]),
             behavior("clickReveal", String(localized: "Reveal on click in empty space"),
                      ["click", "empty area", "blank"]),
             behavior("doubleClickReveal", String(localized: "Double-click shows Always Hidden too"),

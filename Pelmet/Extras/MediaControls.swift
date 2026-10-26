@@ -1323,7 +1323,7 @@ final class ExtrasManager {
         NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let minutes = Double(field.stringValue.replacingOccurrences(of: ",", with: ".")) ?? 0
-        guard minutes > 0 else { return }
+        guard minutes > 0, minutes <= PelmetTimer.maxMinutes else { return }
         pelmetTimer?.start(minutes * 60)
     }
 

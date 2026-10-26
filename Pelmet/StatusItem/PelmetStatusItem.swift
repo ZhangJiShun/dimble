@@ -76,6 +76,14 @@ final class PelmetStatusItem {
         return frame
     }
 
+    /// The full clickable button, including its padding, read live after
+    /// reflows. A glyph's image bounds would make the hover target too small.
+    var buttonScreenFrame: NSRect? {
+        guard item.isVisible, let button = item.button, let window = button.window,
+              !button.isHiddenOrHasHiddenAncestor, !button.bounds.isEmpty else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
     /// An available update earns a 5pt accent dot at the chevron's top
     /// right — the one surface most users ever look at. It lives until the
     /// install relaunches the app.

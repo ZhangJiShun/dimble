@@ -64,22 +64,46 @@ public enum DisplayBehavior: String, Codable, Equatable, Sendable {
     case collapse
 }
 
+public enum HoverRevealScope: String, Codable, CaseIterable, Sendable {
+    case menuBarArea
+    case iconOnly
+}
+
 public struct RevealTriggers: Codable, Equatable, Sendable {
     public var hoverEnabled: Bool
     public var hoverDelay: TimeInterval
+    public var hoverScope: HoverRevealScope
     public var clickEnabled: Bool
     public var doubleClickForAlwaysHidden: Bool
 
     public init(
         hoverEnabled: Bool = true,
         hoverDelay: TimeInterval = 0.1,
+        hoverScope: HoverRevealScope = .menuBarArea,
         clickEnabled: Bool = true,
         doubleClickForAlwaysHidden: Bool = true
     ) {
         self.hoverEnabled = hoverEnabled
         self.hoverDelay = hoverDelay
+        self.hoverScope = hoverScope
         self.clickEnabled = clickEnabled
         self.doubleClickForAlwaysHidden = doubleClickForAlwaysHidden
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hoverEnabled, hoverDelay, hoverScope, clickEnabled, doubleClickForAlwaysHidden
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = Self()
+        hoverEnabled = c.field(Bool.self, .hoverEnabled, defaults.hoverEnabled)
+        hoverDelay = c.field(TimeInterval.self, .hoverDelay, defaults.hoverDelay)
+        // An older store keeps the original broad target and every other
+        // trigger. An unknown scope after a downgrade costs only this field.
+        hoverScope = c.field(HoverRevealScope.self, .hoverScope, defaults.hoverScope)
+        clickEnabled = c.field(Bool.self, .clickEnabled, defaults.clickEnabled)
+        doubleClickForAlwaysHidden = c.field(Bool.self, .doubleClickForAlwaysHidden, defaults.doubleClickForAlwaysHidden)
     }
 }
 

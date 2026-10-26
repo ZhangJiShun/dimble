@@ -796,9 +796,7 @@ private struct GeneralPane: View {
             SettingToggleRow(
                 title: "Launch at login",
                 isOn: binding(\.launchAtLogin) { enabled in
-                    try? enabled
-                        ? SMAppService.mainApp.register()
-                        : SMAppService.mainApp.unregister()
+                    appState.setLaunchAtLogin(enabled)
                 }
             )
             .settingAnchor("launchAtLogin")
@@ -1028,7 +1026,9 @@ private struct BehaviorPane: View {
         SettingsCard(title: "Reveal") {
             SettingRow(
                 title: "Reveal on hover",
-                caption: "Rest the pointer on the right half of the menu bar."
+                caption: appState.settings.revealTriggers.hoverScope == .iconOnly
+                    ? "Rest the pointer on the Dimble icon."
+                    : "Rest the pointer on the right half of the menu bar."
             ) {
                 HStack(spacing: 10) {
                     // The delay belongs to the switch: it shows only while
@@ -1041,6 +1041,20 @@ private struct BehaviorPane: View {
                 }
             }
             .settingAnchor("hoverReveal")
+            SettingRow(
+                title: "Hover trigger area",
+                caption: appState.settings.revealTriggers.hoverScope == .iconOnly && !appState.settings.showStatusItem
+                    ? "Enable the Dimble menu bar icon in General to use icon-only hover."
+                    : nil
+            ) {
+                PelmetMenuPicker(selection: binding(\.revealTriggers.hoverScope), options: [
+                    (.iconOnly, "Dimble icon only"),
+                    (.menuBarArea, "Icon and menu bar area to its left"),
+                ])
+                .disabled(!appState.settings.revealTriggers.hoverEnabled)
+            }
+            .padding(.leading, 20)
+            .settingAnchor("hoverScope")
             SettingToggleRow(title: "Reveal on click in empty space", isOn: binding(\.revealTriggers.clickEnabled))
                 .settingAnchor("clickReveal")
             SettingToggleRow(

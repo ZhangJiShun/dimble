@@ -78,6 +78,15 @@ nonisolated final class PointerMoveTap: @unchecked Sendable {
         return true
     }
 
+    /// A tap the system dropped (Accessibility revoked and granted again,
+    /// a silent invalidation) stays a non-nil object that hears nothing.
+    /// Rebuild it when it is no longer valid and enabled.
+    func reviveIfDead() {
+        guard let tap, !CFMachPortIsValid(tap) || !CGEvent.tapIsEnabled(tap: tap) else { return }
+        stop()
+        _ = start()
+    }
+
     func stop() {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let tapRunLoop, let tapSource {

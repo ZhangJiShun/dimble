@@ -28,6 +28,9 @@ final class PelmetTimer {
     var onChange: () -> Void = {}
 
     static let presets: [TimeInterval] = [60, 300, 600, 900, 1500, 1800, 2700, 3600]
+    /// Longest custom timer (99 h). Also keeps `display`'s Int conversion
+    /// away from inf/NaN, and bounds what a stored fire date may claim.
+    static let maxMinutes: Double = 99 * 60
 
     private var tick: Timer?
     private var ringer: Timer?
@@ -212,11 +215,16 @@ final class PelmetTimer {
 
     private func restore() {
         let defaults = UserDefaults.standard
-        if let paused = defaults.object(forKey: Self.pausedKey) as? TimeInterval, paused > 0 {
+        let limit = Self.maxMinutes * 60
+        if let paused = defaults.object(forKey: Self.pausedKey) as? TimeInterval, paused > 0, paused <= limit {
             state = .paused(remaining: paused)
-        } else if let stamp = defaults.object(forKey: Self.fireDateKey) as? TimeInterval {
+        } else if let stamp = defaults.object(forKey: Self.fireDateKey) as? TimeInterval,
+                  stamp.isFinite {
             let fireDate = Date(timeIntervalSince1970: stamp)
-            if fireDate.timeIntervalSinceNow > 0 {
+            if fireDate.timeIntervalSinceNow > limit {
+                // Written by an older build that took any custom length.
+                defaults.removeObject(forKey: Self.fireDateKey)
+            } else if fireDate.timeIntervalSinceNow > 0 {
                 state = .running(fireDate: fireDate)
                 armTick()
                 PelmetLog.log("timer: restored, \(Int(fireDate.timeIntervalSinceNow))s left")

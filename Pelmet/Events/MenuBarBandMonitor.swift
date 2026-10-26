@@ -18,11 +18,11 @@ final class MenuBarBandMonitor {
     private var dragMonitor: Any?
     private var hoverTimer: Timer?
     private var pointerInBand = false
-    /// The hover reveal listens on the RIGHT half of the bar only: the left
-    /// half is app menus, and a bar that opened while the pointer went for
-    /// File or Edit pulled the eye to the far right for nothing (#21). The
-    /// band as a whole still holds rehide off (`pointerInBand`).
-    private var pointerInHoverZone = false
+    /// Only the reveal target changes with the scope; the whole band still
+    /// holds rehide off so the pointer can travel into the opened panel.
+    private var hoverDwell = HoverDwellState()
+    private var observedHoverTriggers: RevealTriggers?
+    private var observedShowStatusItem: Bool?
     private var cmdDragActive = false
     /// A ⌘-drag happened since the last adoption pass. Band-exit adoption is
     /// a catch-all for missed mouse-ups — but unconditionally snapshotting the
@@ -50,9 +50,6 @@ final class MenuBarBandMonitor {
     private var dragPressedOnBar = false
     private var dragStartedAt: TimeInterval = 0
     private var localDownMonitor: Any?
-    /// Set by a deliberate conceal (chevron / empty-area click) so the hover
-    /// path can't undo it while the pointer is still where it clicked.
-    private var hoverSuppressedUntilExit = false
     private var lastDisplayUUID: String?
 
     /// Per-screen geometry the mouse-move path reads on EVERY event, cached.
@@ -76,7 +73,14 @@ final class MenuBarBandMonitor {
     private var screenGeometry: [ScreenGeometry] = []
     private var screenObserver: NSObjectProtocol?
 
+    func reviveTapIfDead() { pointerTap?.reviveIfDead() }
+
     private func rebuildScreenGeometry(retryingMisses: Bool = true) {
+        // A still pointer sends no mouseMoved to re-enter the target the
+        // reset below clears, so hover would stay off until it moved.
+        let wasInsideHoverTarget = hoverDwell.isInside
+        resetHoverTarget()
+        defer { if wasInsideHoverTarget { pointerMoved() } }
         var missed = false
         screenGeometry = NSScreen.screens.map { screen in
             // Off the main display the visibleFrame keeps no band: the bar's
@@ -329,7 +333,7 @@ final class MenuBarBandMonitor {
         mouseMonitor = nil
         clickMonitor = nil
         dragMonitor = nil
-        hoverTimer?.invalidate()
+        resetHoverTarget()
     }
 
     // MARK: - Pointer
@@ -356,6 +360,9 @@ final class MenuBarBandMonitor {
         // (An instant conceal here flashed the bar open-shut when the pointer
         // crossed displays right after a hover reveal — rehide, don't snap.)
         if displayUUID != lastDisplayUUID {
+            // Dwell time on one display never counts on another.
+            resetHoverTarget()
+            hoverDwell.update(inTarget: false, inBand: false, scope: appState.settings.revealTriggers.hoverScope)
             // The first sighting (nil at launch) reveals on an "always show
             // all" display once the launch is done, and is a baseline
             // otherwise (`DisplayCrossing`, live test 2026-10-13).
@@ -378,7 +385,11 @@ final class MenuBarBandMonitor {
             }
         }
 
-        guard appState.settings.behavior(forDisplayUUID: displayUUID) == .collapse else { return }
+        guard appState.settings.behavior(forDisplayUUID: displayUUID) == .collapse else {
+            resetHoverTarget()
+            hoverDwell.update(inTarget: false, inBand: inBand, scope: appState.settings.revealTriggers.hoverScope)
+            return
+        }
 
         if inBand, !pointerInBand {
             pointerInBand = true
@@ -398,7 +409,6 @@ final class MenuBarBandMonitor {
             }
         } else if !inBand, pointerInBand {
             pointerInBand = false
-            hoverSuppressedUntilExit = false
             // Leaving the band arms the countdown (never an instant conceal),
             // and catches a ⌘-drag whose mouse-up the monitor missed.
             appState.pointerLeftBand()
@@ -428,8 +438,8 @@ final class MenuBarBandMonitor {
         // The hover zone has its own edge: entering the band on the left and
         // sliding right still counts, leaving the zone drops the dwell.
         let inZone = inBand && screen.map { isHoverZone(location, of: $0) } == true
-        if inZone, !pointerInHoverZone {
-            pointerInHoverZone = true
+        let entered = hoverDwell.update(inTarget: inZone, inBand: inBand, scope: appState.settings.revealTriggers.hoverScope)
+        if entered {
             PelmetLog.log("band: hover zone entered at x=\(Int(location.x)) (mid \(Int(screen?.frame.midX ?? -1)))")
             appState.pointerEnteredHoverZone()
             // A synthetic placement warps the pointer through the band — a
@@ -437,19 +447,50 @@ final class MenuBarBandMonitor {
             // running drag (frames shift mid-measurement; seen live during
             // the first overflow rescue). Not a hover.
             scheduleHoverReveal()
-        } else if !inZone, pointerInHoverZone {
-            pointerInHoverZone = false
+        } else if !inZone {
             hoverTimer?.invalidate()
         }
     }
 
-    /// Where a dwell opens the bar: the band, right of the screen's middle,
-    /// up to the chevron (#37, 2026-09-19: a pointer parked on the clock to
+    /// Where a dwell opens the bar: the live button only, or the original
+    /// band right of the screen's middle up to the chevron (#37,
+    /// 2026-09-19: a pointer parked on the clock to
     /// read it, on its way to Notification Center, or resting on a visible
     /// icon is not asking for the hidden icons — only the chevron and the
     /// strip left of it are).
     private func isHoverZone(_ point: NSPoint, of screen: NSScreen) -> Bool {
-        point.x >= screen.frame.midX && !isPastRevealTriggerZone(point, on: screen)
+        guard let appState else { return false }
+        if appState.settings.revealTriggers.hoverScope == .iconOnly {
+            guard appState.settings.showStatusItem,
+                  let button = appState.chevronButtonFrame,
+                  let source = screenGeometry(containing: NSPoint(x: button.midX, y: button.midY)),
+                  let destination = geometry(of: screen),
+                  let target = HoverRevealGeometry.iconTarget(button: button, sourceBand: source.band, targetBand: destination.band)
+            else { return false }
+            // A repeated copy can fall behind a narrower display's notch.
+            if let notch = destination.notch, target.minX < notch.maxX, target.maxX > notch.minX { return false }
+            return NSMouseInRect(point, target, false)
+        }
+        return point.x >= screen.frame.midX && !isPastRevealTriggerZone(point, on: screen)
+    }
+
+    private func resetHoverTarget() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+        hoverDwell.resetTarget()
+    }
+
+    /// Cancel both the timer and any already queued callback when a switch,
+    /// delay or scope changes, even if the pointer has not moved yet.
+    func hoverSettingsChanged() {
+        guard let appState else { return }
+        let triggers = appState.settings.revealTriggers
+        let shown = appState.settings.showStatusItem
+        guard triggers != observedHoverTriggers || shown != observedShowStatusItem else { return }
+        observedHoverTriggers = triggers
+        observedShowStatusItem = shown
+        resetHoverTarget()
+        pointerMoved()
     }
 
     /// Why rehide holds off: pointer in the band, Pelmet's own editor or
@@ -516,16 +557,19 @@ final class MenuBarBandMonitor {
     private func scheduleHoverReveal() {
         guard let appState,
               appState.settings.revealTriggers.hoverEnabled, !appState.isRevealed, appState.itemsInBar.isEmpty else { return }
-        guard !appState.syntheticDragInFlight, !hoverSuppressedUntilExit else {
-            PelmetLog.log("band: hover refused — \(hoverSuppressedUntilExit ? "concealed under the pointer, waits for it to leave the bar" : "synthetic drag in flight")")
+        guard !appState.syntheticDragInFlight, !hoverDwell.isSuppressed else {
+            PelmetLog.log("band: hover refused — \(hoverDwell.isSuppressed ? "concealed under the pointer, waits for target exit" : "synthetic drag in flight")")
             return
         }
         // Floor: otherwise the bar flaps open on the way to a hot corner.
         let delay = max(appState.settings.revealTriggers.hoverDelay, AppTiming.hoverDelayFloor)
         hoverTimer?.invalidate()
+        guard let ticket = hoverDwell.arm() else { return }
         hoverTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
             Task { @MainActor [weak self] in
-                guard let self, let appState = self.appState, self.pointerInHoverZone, appState.itemsInBar.isEmpty else { return }
+                guard let self, let appState = self.appState, self.hoverDwell.allowsReveal(ticket),
+                      appState.settings.revealTriggers.hoverEnabled, !appState.isRevealed,
+                      appState.itemsInBar.isEmpty else { return }
                 PerfTrace.markTrigger("hover")
                 // Re-verify against the LIVE pointer, not just the
                 // tracked flag — the flag lags by one event-delivery
@@ -535,6 +579,8 @@ final class MenuBarBandMonitor {
                 guard let geometry = self.screenGeometry(containing: location),
                       self.isBarHover(location, of: geometry),
                       self.isHoverZone(location, of: geometry.screen),
+                      self.hoverDwell.allowsReveal(ticket),
+                      appState.settings.behavior(forDisplayUUID: geometry.uuid) == .collapse,
                       !appState.syntheticDragInFlight else {
                     PelmetLog.log("band: hover dropped at the dwell's end, pointer at x=\(Int(location.x)) y=\(Int(location.y))")
                     return
@@ -549,16 +595,15 @@ final class MenuBarBandMonitor {
     /// mid-flight — the entry edge is already spent, so without this the bar
     /// stays shut under a hovering pointer until it leaves and re-enters.
     func suppressHoverUntilPointerLeaves() {
-        // Only a pointer on the bar can reopen what was just concealed, and
-        // only leaving the bar clears the flag: set from the shortcut with
-        // the pointer elsewhere, it ate the next hover visit whole (#84).
+        // Broad mode waits for band exit as before. Icon-only mode re-arms
+        // as soon as the pointer leaves that button, even along the bar.
         guard pointerInBand else { return }
-        hoverSuppressedUntilExit = true
+        hoverDwell.suppress(inBand: true)
         hoverTimer?.invalidate()
     }
 
     func rearmHoverAfterConceal() {
-        guard pointerInHoverZone,
+        guard hoverDwell.isInside,
               let appState,
               appState.settings.behavior(
                 forDisplayUUID: NSScreen.containing(NSEvent.mouseLocation)?.displayUUIDString
@@ -905,12 +950,18 @@ final class MenuBarBandMonitor {
         // Convert bottom-left mouse coords → top-left AX coords.
         let axPoint = CGPoint(x: point.x, y: primary.frame.maxY - point.y)
         let systemWide = AXUIElementCreateSystemWide()
+        // Main-thread hit-test: a hung menu-bar app must not hold the UI
+        // for the 6 s AX default.
+        AXUIElementSetMessagingTimeout(systemWide, 0.3)
         var element: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(systemWide, Float(axPoint.x), Float(axPoint.y), &element) == .success,
-              let element else {
+        let hit = AXUIElementCopyElementAtPosition(systemWide, Float(axPoint.x), Float(axPoint.y), &element)
+        // A timed-out lookup says nothing about the bar; don't call it empty.
+        if hit == .cannotComplete { return false }
+        guard hit == .success, let element else {
             // Nothing under the pointer at all — treat as empty bar.
             return true
         }
+        AXUIElementSetMessagingTimeout(element, 0.3)
         var roleValue: CFTypeRef?
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue)
         let role = roleValue as? String ?? ""

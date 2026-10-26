@@ -43,12 +43,29 @@ final class OnboardingController {
         ) { _ in
             MainActor.assumeIsolated { window.level = .floating }
         }
+        // The red close button must drop the window too, or the next
+        // present() would resurface this stale one and ignore its mode.
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.forgetWindow() }
+        }
         self.window = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
 
     private var keyObserver: NSObjectProtocol?
+    private var closeObserver: NSObjectProtocol?
+
+    private func forgetWindow() {
+        for token in [keyObserver, closeObserver] {
+            if let token { NotificationCenter.default.removeObserver(token) }
+        }
+        keyObserver = nil
+        closeObserver = nil
+        window = nil
+    }
 
     /// The system permission dialog (tccd) comes up at normal window level —
     /// a floating onboarding buries it. Drop to normal before triggering any
@@ -59,6 +76,6 @@ final class OnboardingController {
 
     func dismiss() {
         window?.close()
-        window = nil
+        forgetWindow()
     }
 }

@@ -15,8 +15,13 @@ struct PanelTileArt {
     enum Image {
         /// Cut from the bar (ItemPictures); one-colour glyphs are tinted.
         case picture(CGImage, size: CGSize, monochrome: Bool)
-        /// The stand-in until a picture lands: the app's icon or a symbol.
+        /// A configured launcher icon / symbol, or another item's stand-in
+        /// until its menu bar picture lands.
         case icon(NSImage)
+
+        var isPicture: Bool {
+            if case .picture = self { true } else { false }
+        }
     }
 
     let image: Image

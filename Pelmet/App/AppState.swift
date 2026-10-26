@@ -5,6 +5,7 @@
 import AppKit
 import PelmetCore
 import PelmetEngine
+import ServiceManagement
 import SwiftUI
 
 @Observable
@@ -459,6 +460,7 @@ final class AppState {
         registeredNotificationCenterHotkey = activeNotificationCenterHotkey
         registeredSearchHotkey = settings.searchHotkey
         self.hotkey = hotkey
+        reconcileLaunchAtLogin()
         hotkey.onItemTrigger = { [weak self] slot in self?.itemHotkeyFired(slot) }
         syncItemHotkeys()
         // The command bar's panel is built once things have settled, not on
@@ -819,9 +821,37 @@ final class AppState {
     /// when the engine has stopped, or at the deadline, whichever first
     /// (formerly a main-actor-blocking semaphore).
     private var terminationReplied = false
+    /// The login-item switch follows what macOS says. A register that fails
+    /// (app outside /Applications, a refusal) leaves the switch off, and an
+    /// approval still pending is logged, not shown as done.
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            PelmetLog.log("login item: \(enabled ? "register" : "unregister") failed — \(error.localizedDescription)")
+        }
+        let status = SMAppService.mainApp.status
+        if status == .requiresApproval { PelmetLog.log("login item: waiting for approval in System Settings › Login Items") }
+        settings.launchAtLogin = enabled ? (status == .enabled || status == .requiresApproval) : false
+    }
+
+    /// The user can remove the login item in System Settings; the switch
+    /// then says so instead of staying on.
+    func reconcileLaunchAtLogin() {
+        guard settings.launchAtLogin, SMAppService.mainApp.status == .notRegistered else { return }
+        settings.launchAtLogin = false
+        settings.save()
+    }
+
     func beginTermination() {
         rehideTimer?.invalidate()
         eventTask?.cancel()
+        // A change made in the last 300 ms is still waiting on the debounce
+        // that saves it; the quit would drop it. Save now, and stop that
+        // pass from re-driving the engine while it winds down.
+        settingsApplyWork?.cancel()
+        settingsApplyWork = nil
+        settings.save()
         SparkleController.shared.clearUpdateNotification()
         Task { [engine] in
             await engine.stop()
@@ -1329,6 +1359,7 @@ final class AppState {
 
     /// The chevron's drawn frame, nil with the icon off.
     var chevronWindowFrame: NSRect? { statusItem?.windowFrame }
+    var chevronButtonFrame: NSRect? { statusItem?.buttonScreenFrame }
 
     /// Revealed OR heading there — what the chevron should show.
     private var isRevealedOrRevealing: Bool {
@@ -1420,6 +1451,9 @@ final class AppState {
         PelmetLog.log("ax: trusted=\(granted)")
         statusItem?.updateAccessibilityWarning(granted: granted)
         guard granted else { return }
+        // Taps built before a revoke can be dead objects now.
+        clockRelay?.reviveIfDead()
+        bandMonitor?.reviveTapIfDead()
         clockRelay?.setEnabled(settings.clockClickOpensNotificationCenter)
         Task {
             updateSnapshot(await engine.snapshot())
@@ -1836,27 +1870,35 @@ final class AppState {
         } else {
             statusItem?.updateSymbol(revealed: isRevealedOrRevealing)
         }
+        bandMonitor?.hoverSettingsChanged()
         // Re-registering unregisters first — a per-tick re-register left the
         // shortcut momentarily dead. Only touch it when it actually changed.
-        if settings.hotkey != registeredHotkey {
-            hotkeyConflict = !(hotkey?.register(settings.hotkey, slot: .toggle) ?? true)
-            registeredHotkey = settings.hotkey
-        }
-        if settings.settingsHotkey != registeredSettingsHotkey {
-            settingsHotkeyConflict = !(hotkey?.register(settings.settingsHotkey, slot: .settings) ?? true)
-            registeredSettingsHotkey = settings.settingsHotkey
-        }
-        if settings.alwaysHiddenHotkey != registeredAlwaysHiddenHotkey {
-            alwaysHiddenHotkeyConflict = !(hotkey?.register(settings.alwaysHiddenHotkey, slot: .alwaysHidden) ?? true)
-            registeredAlwaysHiddenHotkey = settings.alwaysHiddenHotkey
-        }
-        if activeNotificationCenterHotkey != registeredNotificationCenterHotkey {
-            notificationCenterHotkeyConflict = !(hotkey?.register(activeNotificationCenterHotkey, slot: .notificationCenter) ?? true)
-            registeredNotificationCenterHotkey = activeNotificationCenterHotkey
-        }
-        if settings.searchHotkey != registeredSearchHotkey {
-            searchHotkeyConflict = !(hotkey?.register(settings.searchHotkey, slot: .search) ?? true)
-            registeredSearchHotkey = settings.searchHotkey
+        // A slot that lost its combo to another slot (or app) is retried
+        // here, and once more in the same pass: freeing the combo in an
+        // earlier slot lets a later one take it without a restart.
+        for pass in 0..<2 {
+            if pass == 1, !(hotkeyConflict || settingsHotkeyConflict || alwaysHiddenHotkeyConflict
+                            || notificationCenterHotkeyConflict || searchHotkeyConflict) { break }
+            if settings.hotkey != registeredHotkey || hotkeyConflict {
+                hotkeyConflict = !(hotkey?.register(settings.hotkey, slot: .toggle) ?? true)
+                registeredHotkey = settings.hotkey
+            }
+            if settings.settingsHotkey != registeredSettingsHotkey || settingsHotkeyConflict {
+                settingsHotkeyConflict = !(hotkey?.register(settings.settingsHotkey, slot: .settings) ?? true)
+                registeredSettingsHotkey = settings.settingsHotkey
+            }
+            if settings.alwaysHiddenHotkey != registeredAlwaysHiddenHotkey || alwaysHiddenHotkeyConflict {
+                alwaysHiddenHotkeyConflict = !(hotkey?.register(settings.alwaysHiddenHotkey, slot: .alwaysHidden) ?? true)
+                registeredAlwaysHiddenHotkey = settings.alwaysHiddenHotkey
+            }
+            if activeNotificationCenterHotkey != registeredNotificationCenterHotkey || notificationCenterHotkeyConflict {
+                notificationCenterHotkeyConflict = !(hotkey?.register(activeNotificationCenterHotkey, slot: .notificationCenter) ?? true)
+                registeredNotificationCenterHotkey = activeNotificationCenterHotkey
+            }
+            if settings.searchHotkey != registeredSearchHotkey || searchHotkeyConflict {
+                searchHotkeyConflict = !(hotkey?.register(settings.searchHotkey, slot: .search) ?? true)
+                registeredSearchHotkey = settings.searchHotkey
+            }
         }
         syncItemHotkeys()
         showRules?.update(settings.showRules)

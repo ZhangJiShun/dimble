@@ -14,6 +14,8 @@ cd "$(dirname "$0")/.."
 REPO_ROOT="$PWD"
 BUILD_DIR="$REPO_ROOT/build/release"
 RELEASES_DIR="$REPO_ROOT/build/releases"   # generate_appcast scans this dir
+# A smoke run is unnotarized: keep its DMG out of the dir the appcast signs.
+[[ -n "${SKIP_NOTARIZE:-}" ]] && RELEASES_DIR="$REPO_ROOT/build/releases-smoke"
 NOTARY_PROFILE="${NOTARY_PROFILE:-nook-notary}"
 
 # project.yml carries MARKETING_VERSION twice (app target + the helper
@@ -35,6 +37,7 @@ rm -rf "$BUILD_DIR"
 xcodebuild -project Pelmet.xcodeproj -scheme Pelmet -configuration Release \
     -archivePath "$BUILD_DIR/Dimble.xcarchive" \
     -destination 'generic/platform=macOS' \
+    -clonedSourcePackagesDirPath "$REPO_ROOT/build/SourcePackages" \
     archive | tail -20
 
 echo "==> Exporting with Developer ID signing"
@@ -85,10 +88,14 @@ echo "==> Generating Sparkle appcast"
 # update-signing key. (The tool is ad-hoc signed upstream, so a Team ID pin
 # isn't possible; path trust is the available control.)
 GENERATE_APPCAST="$REPO_ROOT/build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast"
-if [[ ! -x "$GENERATE_APPCAST" ]]; then
-    GENERATE_APPCAST=$(find ~/Library/Developer/Xcode/DerivedData -path '*/artifacts/*/Sparkle/bin/generate_appcast' -print -quit 2>/dev/null || true)
-    [[ -n "$GENERATE_APPCAST" ]] && echo "warning: using generate_appcast from shared DerivedData: $GENERATE_APPCAST" >&2
+if [[ -n "${SKIP_NOTARIZE:-}" ]]; then
+    echo "==> SKIP_NOTARIZE: smoke DMG is in $RELEASES_DIR, appcast skipped"
+    exit 0
 fi
+# No fallback to shared DerivedData: the archive above fetches Sparkle into
+# build/SourcePackages, so a missing tool means a broken build, not a cue to
+# hand the signing key to whatever binary turns up.
+[[ -x "$GENERATE_APPCAST" ]] || { echo "error: generate_appcast not found at $GENERATE_APPCAST" >&2; exit 1; }
 if [[ -n "$GENERATE_APPCAST" ]]; then
     # Signs with the EdDSA private key from the keychain (generate_keys), or
     # from a file when SPARKLE_KEY_FILE is set (CI).

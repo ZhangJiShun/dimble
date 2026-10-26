@@ -15,6 +15,12 @@ OUT = Path(__file__).resolve().parent.parent / "Pelmet" / "Resources" / "Localiz
 
 # key -> {lang: translation}
 T = {
+    # ── Hover trigger scope ─────────────────────────────────────────
+    "Hover trigger area": dict(de="Hover-Bereich", fr="Zone de survol", es="Zona de activación al pasar el cursor", it="Area di attivazione al passaggio", pt="Área de ativação ao passar o cursor", ja="ホバーの反応範囲", zh="触发范围", ko="마우스 올리기 감지 영역", ru="Область наведения"),
+    "Dimble icon only": dict(de="Nur Dimble-Symbol", fr="Icône Dimble uniquement", es="Solo el icono de Dimble", it="Solo icona Dimble", pt="Somente o ícone do Dimble", ja="Dimbleアイコンのみ", zh="仅 Dimble 图标", ko="Dimble 아이콘만", ru="Только значок Dimble"),
+    "Icon and menu bar area to its left": dict(de="Symbol und Menüleiste links davon", fr="Icône et zone de la barre à sa gauche", es="Icono y zona de la barra a su izquierda", it="Icona e area della barra alla sua sinistra", pt="Ícone e área da barra à esquerda", ja="アイコンとその左側のメニューバー", zh="图标及左侧菜单栏区域", ko="아이콘 및 왼쪽 메뉴 막대 영역", ru="Значок и область строки меню слева от него"),
+    "Rest the pointer on the Dimble icon.": dict(de="Zeiger auf dem Dimble-Symbol ruhen lassen.", fr="Laissez le pointeur sur l’icône Dimble.", es="Deja el puntero sobre el icono de Dimble.", it="Lascia il puntatore sull’icona Dimble.", pt="Deixe o ponteiro sobre o ícone do Dimble.", ja="Dimbleアイコンにポインタを置いたままにします。", zh="将鼠标停在 Dimble 图标上即可展开。", ko="Dimble 아이콘 위에 포인터를 올려 두세요.", ru="Задержите указатель на значке Dimble."),
+    "Enable the Dimble menu bar icon in General to use icon-only hover.": dict(de="Aktiviere das Dimble-Menüleistensymbol unter Allgemein für diesen Hover-Bereich.", fr="Activez l’icône Dimble dans Général pour utiliser ce mode de survol.", es="Activa el icono de Dimble en General para usar este modo.", it="Attiva l’icona Dimble in Generali per usare questa modalità.", pt="Ative o ícone do Dimble em Geral para usar este modo.", ja="このモードを使うには「一般」でDimbleのメニューバーアイコンを表示してください。", zh="请先在「通用」中开启菜单栏 Dimble 图标，才能使用此触发方式。", ko="이 모드를 사용하려면 일반에서 Dimble 메뉴 막대 아이콘을 켜세요.", ru="Включите значок Dimble в разделе «Основные», чтобы использовать этот режим."),
     # ── Settings shell ──────────────────────────────────────────────
     "General": dict(de="Allgemein", fr="Général", es="General", it="Generali", pt="Geral", ja="一般", zh="通用", ko="일반", ru="Основные"),
     "Behavior": dict(de="Verhalten", fr="Comportement", es="Comportamiento", it="Comportamento", pt="Comportamento", ja="動作", zh="行为", ko="동작", ru="Поведение"),

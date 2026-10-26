@@ -95,10 +95,19 @@ final class HelperHosts {
         guard host.ready, let data = HelperWire.encode(HelperCommand.sync(host.wantedItems)) else { return }
         PelmetLog.log("helpers: \(host.appName) ← sync \(host.wantedItems.count) item(s)")
         if !MessagePortLink.send(data, to: host.bundleID) {
-            PelmetLog.log("helpers: \(host.appName) not answering — relaunch")
+            // The helper only says ready once, at its own launch, so
+            // relaunching through Launch Services would hand back the same
+            // live process and `ready` would stay false for good. End the
+            // process instead; its exit goes through `helperTerminated`,
+            // which relaunches a fresh one that does say ready.
+            PelmetLog.log("helpers: \(host.appName) not answering — terminating for relaunch")
             hosts[section]?.ready = false
-            track(nil, for: section)
-            launch(section)
+            if let app = host.running, !app.isTerminated {
+                app.forceTerminate()
+            } else {
+                track(nil, for: section)
+                launch(section)
+            }
         }
     }
 

@@ -364,10 +364,7 @@ private struct ReadyStep: View {
             Toggle(isOn: Binding(
                 get: { appState.settings.launchAtLogin },
                 set: { enabled in
-                    appState.settings.launchAtLogin = enabled
-                    try? enabled
-                        ? SMAppService.mainApp.register()
-                        : SMAppService.mainApp.unregister()
+                    appState.setLaunchAtLogin(enabled)
                     appState.settingsChanged()
                 }
             )) {

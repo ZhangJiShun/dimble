@@ -3,6 +3,30 @@ import Testing
 @testable import PelmetCore
 
 struct SettingsStoreTests {
+    @Test func hoverScopeMigrationPreservesExistingTriggers() throws {
+        // Missing, unknown and malformed scope values must not reset the
+        // user's delay or other triggers when upgrading/downgrading.
+        for scope in ["", #","hoverScope":"future""#, #","hoverScope":3"#] {
+            let json = #"{"revealTriggers":{"hoverEnabled":false,"hoverDelay":0.4,"clickEnabled":false,"doubleClickForAlwaysHidden":false"#
+                + scope + "}}"
+            let settings = try JSONDecoder().decode(SettingsStore.self, from: Data(json.utf8))
+            #expect(settings.revealTriggers.hoverScope == .menuBarArea)
+            #expect(!settings.revealTriggers.hoverEnabled)
+            #expect(settings.revealTriggers.hoverDelay == 0.4)
+            #expect(!settings.revealTriggers.clickEnabled)
+            #expect(!settings.revealTriggers.doubleClickForAlwaysHidden)
+        }
+    }
+
+    @Test func iconOnlyHoverSettingsRoundTrip() throws {
+        var settings = SettingsStore()
+        settings.revealTriggers.hoverScope = .iconOnly
+        settings.revealTriggers.hoverDelay = 0.2
+        let back = try JSONDecoder().decode(SettingsStore.self, from: JSONEncoder().encode(settings))
+        #expect(back == settings)
+        #expect(back.revealTriggers.hoverScope == .iconOnly)
+    }
+
     // "Show while revealed" is overridden while a Pelmet replica of a
     // collateral extra is on (#39: the camera pill came back on every hover).
     @Test func collateralReplicaForcesTheSystemExtrasHold() {

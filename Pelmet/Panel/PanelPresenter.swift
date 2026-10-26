@@ -18,9 +18,9 @@ import SwiftUI
 @MainActor
 final class PanelPresenter: RevealPresenter {
     static let cornerRadius: CGFloat = 20
-    /// The mock hangs the panel 6pt under the bar and 6pt past the
-    /// chevron's right edge.
-    static let gapBelowBar: CGFloat = 6
+    /// Both row and grid meet the menu bar's lower edge. The settings
+    /// preview shares this gap; horizontal chevron alignment stays separate.
+    static let gapBelowBar: CGFloat = 0
     static let pastChevron: CGFloat = 6
 
     private weak var appState: AppState?
@@ -114,6 +114,13 @@ final class PanelPresenter: RevealPresenter {
     /// What the last refresh drew, for Return and the arrows.
     private var lastModel: PanelModel?
     private var lastContent: PanelContent?
+    private struct PresentationContext: Equatable {
+        let query: String
+        let row: Bool
+        let options: PanelOptions
+        let alwaysRequested: Bool
+    }
+    private var presentation = PanelPresentationSession<PresentationContext, PanelTileArt.Image>()
     /// Whether the panel last scrolled or wrapped, as logged.
     private var loggedFit: String?
     /// Each open from closed: a scrolled panel opens at the top again.
@@ -256,6 +263,7 @@ final class PanelPresenter: RevealPresenter {
         openedByHover = reason == .hover && (!wasOpen || openedByHover)
         self.sections = sections
         if !wasOpen {
+            presentation.reset()
             awaitsPointer = reason == .hotkey
             openScreen = nil
             openedAtBar = reason.map(Self.atBarReasons.contains) ?? false
@@ -461,6 +469,7 @@ final class PanelPresenter: RevealPresenter {
         guard isOpen else { return }
         if tileDrag != nil { finishDrag(cancel: true, closing: true) }
         isOpen = false
+        presentation.reset()
         pointerOnPanel = false
         askedThisOpen = []
         askedAgainLogged = false
@@ -803,7 +812,7 @@ final class PanelPresenter: RevealPresenter {
         let aimed = tileDrag.flatMap { drag in drag.slot.map { (tile: drag.tile, slot: $0) } }
         let (built, missing, model) = buildContent(
             appState, layout: appState.revealTarget.panelLayout ?? .panel, query: query, selected: selected,
-            foldOpen: foldOpen, alwaysRequested: sections.contains(.alwaysHidden), maxRowWidth: rowWidth, aimed: aimed)
+            foldOpen: foldOpen, alwaysRequested: sections.contains(.alwaysHidden), maxRowWidth: rowWidth, aimed: aimed, live: true)
         var content = built
         lastModel = model
         // What this draw shows of the drag; its frames are not final until the
@@ -968,7 +977,8 @@ final class PanelPresenter: RevealPresenter {
         let model = PanelModel.build(
             roster: appState.settings.sectionModel.roster,
             items: items.map(\.id),
-            drawnOrder: appState.lastDrawnOrder,
+            // Temporary menu bar reflows must not rewrite the panel order.
+            drawnOrder: appState.settings.sectionModel.order,
             didntFit: didntFit(appState),
             // Closed apps off: out of the panel at rest, a search still finds them.
             launchers: options.showsClosedApps || !query.isEmpty ? launchers : [],
@@ -988,11 +998,14 @@ final class PanelPresenter: RevealPresenter {
     /// room; the model returned is the one without it.
     private func buildContent(_ appState: AppState, layout: PanelGrid.Layout, query: String, selected: PanelTile?,
                               foldOpen: Bool, alwaysRequested: Bool, maxRowWidth: CGFloat? = nil,
-                              aimed: (tile: PanelTile, slot: PanelSlot)? = nil)
+                              aimed: (tile: PanelTile, slot: PanelSlot)? = nil, live: Bool = false)
         -> (content: PanelContent, missing: [ItemID], model: PanelModel)
     {
         let options = appState.settings.panel
-        let (base, items) = buildModel(appState, query: query, alwaysRequested: alwaysRequested)
+        let (proposed, items) = buildModel(appState, query: query, alwaysRequested: alwaysRequested)
+        let editing = tileDrag != nil || aimed != nil || barDragging
+        let context = PresentationContext(query: query, row: layout == .row, options: options, alwaysRequested: alwaysRequested)
+        let base = live ? presentation.stabilize(proposed, context: context, editing: editing) : proposed
         // Each section is a grid of its own in the panel: the tile keeps its
         // dimmed place in the one it came from, so that one doesn't reflow
         // under the pointer. The row is one grid, where it only moves.
@@ -1064,13 +1077,6 @@ final class PanelPresenter: RevealPresenter {
                             query.isEmpty ? PanelMetrics.compact.wellSize.width : 150)
 
         let byKey = Dictionary(items.map { ($0.id.sectionKey, $0) }, uniquingKeysWith: { first, _ in first })
-        // Didn't fit is on the bar, behind «: no pass reaches it. Read from
-        // the model, as the row draws every section in one block.
-        let didntFitKeys = Set(model.section(.didntFit)?.tiles.compactMap { tile -> ItemID? in
-            if case .item(let key) = tile { return key }
-            return nil
-        } ?? [])
-        var missing: [ItemID] = []
         for block in content.blocks where !block.isFolded {
             for tile in block.grid.rows.joined().map(\.tile) {
                 switch tile {
@@ -1079,31 +1085,60 @@ final class PanelPresenter: RevealPresenter {
                     if !appState.isImmovable(key) { content.draggable.insert(tile) }
                     let item = byKey[key]
                     let name = item.map(ItemNaming.displayName(for:)) ?? ItemNaming.displayName(for: key)
-                    if let picture = pictures.picture(for: key) {
-                        content.art[tile] = PanelTileArt(
-                            image: .picture(picture.image, size: picture.size, monochrome: picture.isMonochrome), name: name)
-                        // Shown while the pass retakes it.
-                        if pictures.isStale(picture), !didntFitKeys.contains(key) { missing.append(key) }
+                    let id = item?.id ?? key
+                    let icon = Self.nativeIcon(for: id, extras: appState.settings.extraItems)
+                    let parentName: String?
+                    if case .appIcon(let bundle) = PanelItemImageSource.resolve(for: id, extras: appState.settings.extraItems) {
+                        parentName = Self.nativeAppNames[bundle]
                     } else {
-                        content.art[tile] = PanelTileArt(image: .icon(Self.standIn(for: item?.id ?? key)), name: name)
-                        if !didntFitKeys.contains(key) { missing.append(key) }
+                        parentName = nil
                     }
+                    content.art[tile] = PanelTileArt(image: .icon(icon), name: parentName ?? name)
                 case .launcher(let bundle):
                     content.art[tile] = PanelTileArt(
                         image: .icon(Self.launcherIcon(bundle)), name: ItemNaming.appName(forBundle: bundle) ?? bundle, dimmed: true)
                 case .rowBreak, .fold:
                     break
                 }
+                if live, !editing, let art = content.art[tile] {
+                    content.art[tile] = PanelTileArt(
+                        image: presentation.image(for: tile, proposed: art.image, isFinal: art.image.isPicture),
+                        name: art.name, dimmed: art.dimmed)
+                }
             }
         }
         content.selected = selected.flatMap { content.art[$0] == nil && $0 != .fold ? nil : $0 }
-        return (content, missing, base)
+        // No screen crop is needed to draw these native application icons.
+        return (content, [], base)
     }
 
-    /// The app's icon as launchers draw it, cached there: the preview
-    /// rebuilds on every bar read and drag step.
+    private static func nativeIcon(for id: ItemID, extras: [ExtraItemSpec]) -> NSImage {
+        switch PanelItemImageSource.resolve(for: id, extras: extras) {
+        case .appIcon(let bundle): launcherIcon(bundle)
+        case .systemItem: standIn(for: id)
+        case .unavailable: placeholder
+        }
+    }
+
+    private static var nativeAppIcons: [String: NSImage] = [:]
+    private static var nativeAppNames: [String: String] = [:]
+
+    /// Cache native artwork rather than screen pixels. An embedded helper
+    /// gets its enclosing application's branding, e.g. DoubaoWork Browser.
     private static func launcherIcon(_ bundle: String) -> NSImage {
-        ExtrasManager.appIcon(for: ExtraItemSpec(kind: .appLauncher, bundleID: bundle), size: 20) ?? placeholder
+        if let cached = nativeAppIcons[bundle] { return cached }
+        guard let url = ExtrasManager.appURL(for: ExtraItemSpec(kind: .appLauncher, bundleID: bundle)) else { return placeholder }
+        let application = PanelItemImageSource.applicationIconURL(for: url)
+        guard let icon = NSWorkspace.shared.icon(forFile: application.path).copy() as? NSImage else { return placeholder }
+        icon.size = NSSize(width: 20, height: 20)
+        icon.isTemplate = false
+        nativeAppIcons[bundle] = icon
+        if application.path != url.path {
+            let name = NSWorkspace.shared.runningApplications.first { $0.bundleURL?.path == application.path }?.localizedName
+                ?? (Bundle(url: application)?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            if let name, !name.isEmpty { nativeAppNames[bundle] = name }
+        }
+        return icon
     }
 
     /// The editor's stand-in (`ItemStandIn`): Apple's own mark for
@@ -1668,12 +1703,8 @@ final class PanelPresenter: RevealPresenter {
         barGhost?.release()
         barGhost = nil
         guard isOpen, let window, let grid = lastContent?.blocks.first?.grid else { return }
-        let art: PanelTileArt
-        if let id, let picture = pictures.picture(for: id.sectionKey) {
-            art = PanelTileArt(image: .picture(picture.image, size: picture.size, monochrome: picture.isMonochrome), name: "")
-        } else {
-            art = PanelTileArt(image: .icon(id.map(Self.standIn(for:)) ?? Self.placeholder), name: "")
-        }
+        let icon = id.map { Self.nativeIcon(for: $0, extras: appState?.settings.extraItems ?? []) } ?? Self.placeholder
+        let art = PanelTileArt(image: .icon(icon), name: "")
         barGhost = PanelDragGhost(art: art, grid: grid, appearance: window.appearance)
     }
 
@@ -2100,6 +2131,9 @@ final class PanelPresenter: RevealPresenter {
         let newlyMissing = absent.subtracting(noIcon)
         noIcon.formUnion(absent)
         guard !newlyMissing.isEmpty || !backNow.isEmpty else { return false }
+        // The open panel is frozen; a verdict that an icon is gone has to
+        // reach it, or its tile stays up and answers clicks with nothing.
+        presentation.forget(Set(newlyMissing.map(PanelTile.item)))
         PelmetLog.log("panel: no icon in the bar, left out \(newlyMissing.map(\.rawValue).sorted())\(backNow.isEmpty ? "" : ", back \(backNow.map(\.rawValue).sorted())")")
         return true
     }

@@ -88,6 +88,16 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
         }
     }
 
+    /// See `PointerMoveTap.reviveIfDead`: a tap the system dropped keeps its
+    /// object but stops hearing clicks. Rebuild it, keeping `enabled`.
+    func reviveIfDead() {
+        guard let tap, !CFMachPortIsValid(tap) || !CGEvent.tapIsEnabled(tap: tap) else { return }
+        let wasEnabled = lock.withLock { enabled }
+        stop()
+        lock.withLock { enabled = wasEnabled }
+        startTap()
+    }
+
     func stop() {
         lock.withLock { enabled = false }
         guard let tap else { return }
@@ -353,8 +363,11 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
     /// reference stays valid across the drop.
     @MainActor static func clockElement(at point: CGPoint) -> AXUIElement? {
         var element: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
+        let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, 0.3)
+        guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element) == .success,
               let element else { return nil }
+        AXUIElementSetMessagingTimeout(element, 0.3)
         var identifier: CFTypeRef?
         AXUIElementCopyAttributeValue(element, "AXIdentifier" as CFString, &identifier)
         return identifier as? String == "com.apple.menuextra.clock" ? element : nil
