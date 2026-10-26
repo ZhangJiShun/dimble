@@ -292,6 +292,53 @@ import Testing
         #expect(model.section(.hidden)?.tiles == [tile("dock"), tile("dis")])
     }
 
+    // MARK: - App launchers beside the app's own icon
+
+    private func launcherItem(_ spec: ExtraItemSpec) -> ItemID {
+        .status(bundle: PelmetBundle.mainID, title: spec.itemTitle)
+    }
+
+    @Test func launcherStepsAsideWhileTheAppHasItsOwnIcon() {
+        let spec = ExtraItemSpec(kind: .appLauncher, bundleID: "com.tw93.MoleApp", appName: "Mole")
+        let launcher = launcherItem(spec)
+        let model = PanelModel.build(
+            roster: roster(hidden: ["com.tw93.MoleApp", "other"], extra: [launcher.sectionKey: .hidden]),
+            items: [raw("com.tw93.MoleApp", "Mole"), launcher, raw("other")],
+            extras: [spec])
+        #expect(model.section(.hidden)?.tiles == [tile("com.tw93.MoleApp"), tile("other")])
+    }
+
+    @Test func launcherStaysWhenTheAppHasNoIconOfItsOwn() {
+        let spec = ExtraItemSpec(kind: .appLauncher, bundleID: "com.tw93.MoleApp", appName: "Mole")
+        let launcher = launcherItem(spec)
+        let model = PanelModel.build(
+            roster: roster(hidden: ["other"], extra: [launcher.sectionKey: .hidden]),
+            items: [launcher, raw("other")],
+            extras: [spec])
+        #expect(model.section(.hidden)?.tiles.contains(.item(launcher.sectionKey)) == true)
+    }
+
+    @Test func launcherForAnotherAppIsLeftAlone() {
+        let spec = ExtraItemSpec(kind: .appLauncher, bundleID: "com.example.closed", appName: "Closed")
+        let launcher = launcherItem(spec)
+        let model = PanelModel.build(
+            roster: roster(hidden: ["com.tw93.MoleApp"], extra: [launcher.sectionKey: .hidden]),
+            items: [raw("com.tw93.MoleApp", "Mole"), launcher],
+            extras: [spec])
+        #expect(model.section(.hidden)?.tiles.count == 2)
+    }
+
+    @Test func launcherStepsAsideEvenAcrossSections() {
+        let spec = ExtraItemSpec(kind: .appLauncher, bundleID: "com.tw93.MoleApp", appName: "Mole")
+        let launcher = launcherItem(spec)
+        let model = PanelModel.build(
+            roster: roster(always: ["com.tw93.MoleApp"], extra: [launcher.sectionKey: .hidden]),
+            items: [raw("com.tw93.MoleApp", "Mole"), launcher],
+            extras: [spec])
+        #expect(model.section(.hidden)?.tiles == [])
+        #expect(model.section(.alwaysHidden)?.tiles == [tile("com.tw93.MoleApp")])
+    }
+
     @Test func filterReachesDidntFitToo() {
         let model = PanelModel.build(
             roster: Roster(), items: [raw("dis")], didntFit: [raw("dis")],

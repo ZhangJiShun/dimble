@@ -82,6 +82,10 @@ public struct PanelModel: Equatable, Sendable {
     ///     which can disagree by one (S4). Each shows once, here, not also in
     ///     its own section.
     ///   - launchers: bundle IDs of apps in a section that aren't running.
+    ///   - extras: the configured extras. An app launcher (Dimble's own icon
+    ///     that opens an app) steps aside while that app has an icon of its
+    ///     own in the panel, so one app is one tile; it is back when the app
+    ///     has no icon of its own.
     ///   - alwaysHiddenRequested: the opener asked for Always Hidden (⌥-click,
     ///     double-click, its shortcut): open even when the setting hides it.
     ///   - query: the filter. Rows are the command bar's candidates, matched
@@ -92,6 +96,7 @@ public struct PanelModel: Equatable, Sendable {
         drawnOrder: [Section: [ItemID]] = [:],
         didntFit: [ItemID] = [],
         launchers: [String] = [],
+        extras: [ExtraItemSpec] = [],
         options: PanelOptions = PanelOptions(),
         alwaysHiddenRequested: Bool = false,
         query: String = "",
@@ -103,7 +108,16 @@ public struct PanelModel: Equatable, Sendable {
 
         let overflowing = unique(didntFit.map(\.sectionKey).filter { isTile($0) && !$0.isPelmetSeparator })
         let overflowSet = Set(overflowing)
-        let seen = unique(items.map(\.sectionKey).filter(isTile)).filter { !overflowSet.contains($0) }
+        var seen = unique(items.map(\.sectionKey).filter(isTile)).filter { !overflowSet.contains($0) }
+        if extras.contains(where: { $0.kind == .appLauncher }) {
+            let ownIcons = Set(seen.filter { !$0.isPelmetAppLauncher }.compactMap(\.bundleID))
+            seen.removeAll { key in
+                guard key.isPelmetAppLauncher,
+                      case .appIcon(let bundle) = PanelItemImageSource.resolve(for: key, extras: extras)
+                else { return false }
+                return ownIcons.contains(bundle)
+            }
+        }
 
         func tiles(in section: Section) -> [PanelTile] {
             let members = seen.filter { roster.section(of: $0) == section }

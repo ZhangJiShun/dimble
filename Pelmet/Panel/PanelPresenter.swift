@@ -1050,6 +1050,7 @@ final class PanelPresenter: RevealPresenter {
             didntFit: didntFit(appState),
             // Closed apps off: out of the panel at rest, a search still finds them.
             launchers: options.showsClosedApps || !query.isEmpty ? launchers : [],
+            extras: appState.settings.extraItems,
             options: options,
             alwaysHiddenRequested: alwaysRequested,
             query: query,
