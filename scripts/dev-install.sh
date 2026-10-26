@@ -109,12 +109,17 @@ fi
 # ---------- 编译 ----------
 echo "==> 编译 Release（构建目录: $BUILD_DIR）"
 mkdir -p "$BUILD_DIR"
+NEW_APP="$BUILD_DIR/Build/Products/Release/Dimble.app"
+BUILD_LOG="$BUILD_DIR/last-build.log"
+# 构建目录保留了上一次的产物：编译前先删掉，否则编译失败时旧版会被当成新版签名、安装。
+rm -rf "$NEW_APP"
+build_status=0
 (cd "$REPO" && xcodebuild -project Pelmet.xcodeproj -scheme Pelmet -configuration Release \
     -destination 'platform=macOS' -derivedDataPath "$BUILD_DIR" \
-    CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build 2>&1 \
-    | grep -E "error:|BUILD " || true)
-NEW_APP="$BUILD_DIR/Build/Products/Release/Dimble.app"
-[ -d "$NEW_APP" ] || { echo "没有生成 $NEW_APP，编译失败" >&2; exit 1; }
+    CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build) >"$BUILD_LOG" 2>&1 || build_status=$?
+grep -E "error:|BUILD " "$BUILD_LOG" || true
+[ "$build_status" -eq 0 ] || { echo "编译失败（xcodebuild 退出码 $build_status），完整日志: $BUILD_LOG；没有动已安装的版本" >&2; exit 1; }
+[ -d "$NEW_APP" ] || { echo "没有生成 $NEW_APP，编译失败；完整日志: $BUILD_LOG" >&2; exit 1; }
 
 # ---------- 签名（由内向外；不用 --deep，每个组件按自己的标识生成签名要求）----------
 sign_all() {
