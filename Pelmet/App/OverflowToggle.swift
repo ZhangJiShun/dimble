@@ -73,6 +73,9 @@ enum OverflowToggle {
         guard let agent = NSRunningApplication.runningApplications(withBundleIdentifier: PelmetBundle.agentID).first
         else { return nil }
         let app = AXUIElementCreateApplication(agent.processIdentifier)
+        // Like the label-only reads below: an agent that stops answering
+        // costs 0.25s a call, not the default 6s each of the sweep's hit-tests.
+        AXUIElementSetMessagingTimeout(app, 0.25)
         return listed(in: app).first ?? sweep(app)
     }
 

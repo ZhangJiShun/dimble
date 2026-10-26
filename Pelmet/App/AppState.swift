@@ -3400,9 +3400,12 @@ final class AppState {
         if !isFront() {
             // Cooperative activation can refuse a background app: ask the
             // app itself (public AX, already trusted for the pass).
-            AXUIElementSetAttributeValue(
-                AXUIElementCreateApplication(app.processIdentifier), kAXFrontmostAttribute as CFString, kCFBooleanTrue
-            )
+            // On the main actor: an app that doesn't answer would hold the
+            // UI for the default 6s, so it gets the short timeout the other
+            // AX reads here take.
+            let target = AXUIElementCreateApplication(app.processIdentifier)
+            AXUIElementSetMessagingTimeout(target, 0.25)
+            AXUIElementSetAttributeValue(target, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
             try? await Task.sleep(for: .milliseconds(150))
         }
         PelmetLog.log("group: focus handed back to \(app.localizedName ?? "pid \(app.processIdentifier)") — \(isFront() ? "front" : "not front")")
