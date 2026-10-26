@@ -153,8 +153,17 @@ quit_installed
 if [ -d "$INSTALLED" ]; then
     mkdir -p "$BACKUP_DIR"
     backup="$BACKUP_DIR/Dimble-$(version_of "$INSTALLED")-$(date +%Y%m%d-%H%M%S).app"
+    installed_signed=0
+    codesign --verify --deep "$INSTALLED" 2>/dev/null && installed_signed=1
     ditto "$INSTALLED" "$backup"
-    codesign --verify --deep "$backup" 2>/dev/null || echo "!! 备份的签名校验未通过（旧版可能本来就没签名），已保留备份：$backup" >&2
+    if ! codesign --verify --deep "$backup" 2>/dev/null; then
+        if [ "$installed_signed" -eq 1 ]; then
+            # 原版签名是好的而备份不好：备份有问题，回退会指向一个坏副本，所以不替换。
+            echo "!! 备份的签名校验未通过，而已安装的版本签名正常：备份可能损坏，没有替换。已安装的版本原样保留，备份在 $backup" >&2
+            exit 1
+        fi
+        echo "!! 已安装的版本本来就没有有效签名，备份同样校验不过，继续替换。备份：$backup" >&2
+    fi
     echo "==> 旧版本已备份到 $backup"
     rm -rf "$INSTALLED"
 fi
