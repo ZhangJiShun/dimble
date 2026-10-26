@@ -238,9 +238,11 @@ final class PanelPresenter: RevealPresenter {
     }
 
     private var showsGrip = false
-    /// Where the panel's middle is held while it sits centred under the
-    /// chevron; nil when a display edge or a missing icon fixes its right.
-    private var centerAnchorX: CGFloat?
+    /// The chevron's centre and the glass's right limit, kept whether or not
+    /// an edge is pushing the panel: the column drag reads the pointer against
+    /// them, so a panel pushed in from the left doesn't chase its own right
+    /// edge. Nil when there is no chevron to centre on.
+    private var dragAnchor: (x: CGFloat, maxX: CGFloat)?
 
     private func updateGrip() {
         gripHost?.rootView = PanelEdgeGrip(
@@ -780,10 +782,10 @@ final class PanelPresenter: RevealPresenter {
             let placement = PanelHorizontalPlacement.glassLeft(
                 anchor: anchor, width: width, minX: target.frame.minX + margin, maxX: target.frame.maxX - margin)
             glassX = placement.x.rounded()
-            centerAnchorX = placement.centered ? anchor : nil
+            dragAnchor = (anchor, target.frame.maxX - margin)
         } else {
             glassX = max(target.frame.maxX - margin - width, target.frame.minX + margin).rounded()
-            centerAnchorX = nil
+            dragAnchor = nil
         }
         // The glass's frame, then the window's: wider by the grip's margin.
         let frame = NSRect(
@@ -1864,10 +1866,11 @@ final class PanelPresenter: RevealPresenter {
             stopWatchingColumnRelease()
         }
         // The window moves as it widens: the pointer is read on screen.
-        let columns = setColumns(
-            distance: PanelHorizontalPlacement.dragDistance(
-                pointerX: NSEvent.mouseLocation.x, anchor: centerAnchorX, rightEdge: window.frame.maxX),
-            model: lastModel, ended: ended)
+        let pointerX = NSEvent.mouseLocation.x
+        let distance = dragAnchor.map {
+            PanelHorizontalPlacement.dragDistance(pointerX: pointerX, anchor: $0.x, maxX: $0.maxX)
+        } ?? PanelHorizontalPlacement.dragDistance(pointerX: pointerX, anchor: nil, rightEdge: window.frame.maxX)
+        let columns = setColumns(distance: distance, model: lastModel, ended: ended)
         showTip(String(localized: "\(columns) per row"), for: ended ? 0.5 : nil)
     }
 
