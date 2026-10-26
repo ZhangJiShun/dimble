@@ -69,13 +69,15 @@ public actor AgentBarEngine: MenuBarEngine {
     /// beat later (Siri blinking on every press, 2026-09-21). The mute only
     /// holds while the sections are the ones the companion last got: a hover
     /// that reveals one meanwhile is a real change and fires it.
-    private var companionMuted = false
+    /// A count, not a flag: several item-only changes can sit inside
+    /// `converge()` at once, and the first to finish must not unmute the rest.
+    private var companionMute = CompanionMute()
     private var companionSections: Set<Section>?
 
     private func notifyReflowCompanion() {
         guard let reflowCompanion else { return }
         let revealed = revealedSections
-        if companionMuted, companionSections == revealed { return }
+        if companionMute.isMuted, companionSections == revealed { return }
         companionSections = revealed
         Task { @MainActor in reflowCompanion(revealed) }
     }
@@ -246,18 +248,18 @@ public actor AgentBarEngine: MenuBarEngine {
     /// every section stays as it is, nothing else reflows.
     public func reveal(items: Set<ItemID>) async {
         revealedItems.formUnion(items)
-        companionMuted = true
+        companionMute.enter()
         await converge()
-        companionMuted = false
+        companionMute.leave()
     }
 
     /// Put these items back after an item-only reveal. Sections revealed
     /// meanwhile (a hover) stay as they are.
     public func conceal(items: Set<ItemID>) async {
         revealedItems.subtract(items)
-        companionMuted = true
+        companionMute.enter()
         await converge()
-        companionMuted = false
+        companionMute.leave()
     }
 
     /// The items revealed on their own right now: a press's, or a picture
@@ -269,9 +271,9 @@ public actor AgentBarEngine: MenuBarEngine {
     public func setRuleShown(_ items: Set<ItemID>) async {
         guard items != ruleShownItems else { return }
         ruleShownItems = items
-        companionMuted = true
+        companionMute.enter()
         await converge()
-        companionMuted = false
+        companionMute.leave()
     }
 
     public func conceal() async {
@@ -283,10 +285,11 @@ public actor AgentBarEngine: MenuBarEngine {
     public func conceal(releasing items: Set<ItemID>) async {
         revealedItems.subtract(items)
         // Nothing revealed but items: no section changes, the extras stay.
-        companionMuted = revealedSections.isEmpty && !revealedItems.isEmpty
+        let muted = revealedSections.isEmpty && !revealedItems.isEmpty
+        if muted { companionMute.enter() }
         revealedSections = []
         await converge()
-        companionMuted = false
+        if muted { companionMute.leave() }
     }
 
     /// Bundle ids of the running applications, pushed by the app from its
