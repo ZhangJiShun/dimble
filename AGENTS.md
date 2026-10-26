@@ -44,7 +44,7 @@ scripts/dev-install.sh --rollback                   # 换回上一个版本
 - **工程文件 `Pelmet.xcodeproj` 由 `project.yml` 生成、不进 git。** 合并上游或新增源文件后必须重新生成（`xcodegen generate`），否则编译报「找不到某个类型」。`dev-install.sh` 会自动执行。
 - 本机没有装官方 xcodegen 时，曾用过 Codex 留在 `/private/tmp/codex-dimble-xcodegen-*/xcodegen/bin/xcodegen` 的副本（经用户同意）；长期应 `brew install xcodegen`（全局安装要先问）。用环境变量 `DIMBLE_XCODEGEN` 指定。
 - 命令行编译（不签名，只验证能编过）：`xcodebuild -project Pelmet.xcodeproj -scheme Pelmet -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build`。直接 `build` 会因缺 Mac Development 证书失败，这不是代码问题。
-- App 工程自己的测试在 `PelmetTests/`，用同样参数把 `build` 换成 `test`。
+- App 工程自己的测试在 `PelmetTests/`，用同样参数把 `build` 换成 `test`。**跑它会启动一个未签名的 Dimble 当测试宿主，系统可能弹出「Dimble 想要录制屏幕」的提示，点「拒绝」即可**（不要点「打开系统设置」去授权：那会把一个临时副本加进授权列表；已装在 `/Applications` 的固定证书版本不受影响）。
 - 日志：`~/Library/Logs/Dimble/`（最新一个文件）。看授权状态搜 `ax:`，看转场搜 `converge`、`cover`。
 - 没有真机截图验证能力时，**如实说「没有实机看过」**，不要写「已验证界面」。
 
