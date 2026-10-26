@@ -188,6 +188,9 @@ private struct PanelPreviewStage: View {
     /// The panel's right edge in the window: it stays put while the left
     /// edge is dragged, as on screen.
     @State private var panelMaxX: CGFloat = 0
+    @State private var panelWidth: CGFloat = 0
+    /// The panel's middle in the window while it sits centred on the chevron.
+    @State private var panelCenterX: CGFloat?
     @State private var tip: String?
     @State private var tipTask: Task<Void, Never>?
     @State private var height = Self.minHeight
@@ -208,6 +211,10 @@ private struct PanelPreviewStage: View {
     private static let hiddenDots = 4
     /// The chevron's right edge, in from the stage's.
     private static let chevronInset = inset + CGFloat(visibleDots) * (dot + gap)
+    /// The chevron's middle, in from the stage's right edge, and the least
+    /// room the panel keeps from that edge.
+    private static let chevronMid = chevronInset + dot / 2
+    private static let previewEdge: CGFloat = 8
 
     private var presenter: PanelPresenter { appState.panelPresenter }
 
@@ -263,7 +270,7 @@ private struct PanelPreviewStage: View {
                 if let built, panelShown {
                     panel(built.content, model: built.model)
                         .padding(.top, Self.barHeight + PanelPresenter.gapBelowBar)
-                        .padding(.trailing, Self.chevronInset - PanelPresenter.pastChevron)
+                        .padding(.trailing, max(Self.previewEdge, Self.chevronMid - panelWidth / 2))
                         .transition(.opacity)
                 }
             }
@@ -389,6 +396,8 @@ private struct PanelPreviewStage: View {
             .simultaneousGesture(TapGesture().onEnded { focused = true })
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                 panelMaxX = frame.maxX
+                panelWidth = frame.width
+                panelCenterX = Self.chevronMid - frame.width / 2 >= Self.previewEdge ? frame.midX : nil
                 fit(Self.barHeight + PanelPresenter.gapBelowBar + frame.height + 20)
             }
     }
@@ -431,7 +440,9 @@ private struct PanelPreviewStage: View {
     }
 
     private func dragColumns(x: CGFloat, ended: Bool, model: PanelModel) {
-        let columns = presenter.setColumns(distance: panelMaxX - x, model: model, ended: ended)
+        let columns = presenter.setColumns(
+            distance: PanelHorizontalPlacement.dragDistance(pointerX: x, anchor: panelCenterX, rightEdge: panelMaxX),
+            model: model, ended: ended)
         showTip(String(localized: "\(columns) per row"), for: ended ? 0.5 : nil)
     }
 

@@ -236,6 +236,9 @@ final class PanelPresenter: RevealPresenter {
     }
 
     private var showsGrip = false
+    /// Where the panel's middle is held while it sits centred under the
+    /// chevron; nil when a display edge or a missing icon fixes its right.
+    private var centerAnchorX: CGFloat?
 
     private func updateGrip() {
         gripHost?.rootView = PanelEdgeGrip(
@@ -705,23 +708,29 @@ final class PanelPresenter: RevealPresenter {
         keyMonitor = nil
     }
 
-    /// Right-aligned under the bar, its right edge just past the chevron
-    /// (the display's edge less a margin when the icon is off). It opens on
-    /// the display under the pointer; the chevron's distance from its
-    /// display's right edge carries over, as the bar lays out the same on
-    /// every display.
+    /// Centred under the chevron, pushed in by the display's edges when it
+    /// won't fit (right-aligned at the display's edge less a margin when
+    /// the icon is off). It opens on the display under the pointer; the
+    /// chevron's distance from its display's right edge carries over, as
+    /// the bar lays out the same on every display.
     private func place(_ size: CGSize) {
         guard let window, let target = targetScreen() else { return }
         defer { updateTypingZone() }
         let margin = GlassPanel.edgeMargin
-        var right = target.frame.maxX - margin
-        if let chevron = drawnChevron() {
-            right = min(right, target.frame.maxX - (chevron.screen.frame.maxX - chevron.frame.maxX) + Self.pastChevron)
-        }
         let width = min(size.width, target.frame.width - 2 * margin)
         let top = Self.top(on: target)
+        let glassX: CGFloat
+        if let chevron = drawnChevron() {
+            let anchor = target.frame.maxX - (chevron.screen.frame.maxX - chevron.frame.midX)
+            let placement = PanelHorizontalPlacement.glassLeft(
+                anchor: anchor, width: width, minX: target.frame.minX + margin, maxX: target.frame.maxX - margin)
+            glassX = placement.x.rounded()
+            centerAnchorX = placement.centered ? anchor : nil
+        } else {
+            glassX = max(target.frame.maxX - margin - width, target.frame.minX + margin).rounded()
+            centerAnchorX = nil
+        }
         // The glass's frame, then the window's: wider by the grip's margin.
-        let glassX = max(right - width, target.frame.minX + margin).rounded()
         let frame = NSRect(
             x: glassX - window.leadingMargin,
             y: (top - size.height).rounded(),
@@ -1795,7 +1804,10 @@ final class PanelPresenter: RevealPresenter {
             stopWatchingColumnRelease()
         }
         // The window moves as it widens: the pointer is read on screen.
-        let columns = setColumns(distance: window.frame.maxX - NSEvent.mouseLocation.x, model: lastModel, ended: ended)
+        let columns = setColumns(
+            distance: PanelHorizontalPlacement.dragDistance(
+                pointerX: NSEvent.mouseLocation.x, anchor: centerAnchorX, rightEdge: window.frame.maxX),
+            model: lastModel, ended: ended)
         showTip(String(localized: "\(columns) per row"), for: ended ? 0.5 : nil)
     }
 
