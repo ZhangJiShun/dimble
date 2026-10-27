@@ -280,7 +280,11 @@ enum AppTiming {
     /// expanded for the press: the visible run sits ~38pt from where the
     /// cover's picture has it, and lifting would jump it. Flip to keep the
     /// cover up through the menu (the final conceal raises its own).
-    static let pressCoverLiftsAfterClick = true
+    /// Dimble: off. A press never shows the real icon, the panel is where
+    /// icons live; the cover stays up through the menu or window and is
+    /// kept alive `pressCoverHoldStep` at a time while the relay waits.
+    static let pressCoverLiftsAfterClick = false
+    static let pressCoverHoldStep: TimeInterval = 1.5
 
     /// The hidden-icons panel, from the mock: in with an 8pt drop as it
     /// fades, out rising 6pt. Reduce Motion keeps the fades alone.

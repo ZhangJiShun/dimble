@@ -286,11 +286,12 @@ final class ItemPress {
                 cover = nil
                 PelmetLog.log("press: \(key.rawValue) cover lifted at \(ms())ms")
             }
-            let sign = await waitForSign(over: before, pid: target.pid, geometry: geometry, frontCounts: !wasFront, run: run)
+            let hold: () -> Void = { [cover] in cover?.keepUp(for: AppTiming.pressCoverHoldStep) }
+            let sign = await waitForSign(over: before, pid: target.pid, geometry: geometry, frontCounts: !wasFront, run: run, hold: hold)
             PelmetLog.log("press: \(key.rawValue) \(sign.map { "showed \($0.rawValue)" } ?? "showed nothing") at \(ms())ms")
             // An item that was never put away has nothing to wait for.
             if let sign, revealed || toggle != nil || unheld {
-                atRest = await waitUntilGone(key, sign: sign, pid: target.pid, before: before, geometry: geometry, run: run, elapsed: ms)
+                atRest = await waitUntilGone(key, sign: sign, pid: target.pid, before: before, geometry: geometry, run: run, hold: hold, elapsed: ms)
             } else {
                 atRest = sign == nil
             }
@@ -299,10 +300,13 @@ final class ItemPress {
         }
 
         if revealed || toggle != nil {
-            // Put back under a cover of its own: the one from the reveal was
-            // lifted for the menu, or has run out its safety by now.
-            cover?.dismiss()
-            cover = await transitions.beginBarCover(label: "press")
+            // Put back under the cover held since the reveal; a fresh one
+            // only when it was lifted or never raised.
+            if cover == nil {
+                cover = await transitions.beginBarCover(label: "press")
+            } else {
+                cover?.keepUp(for: AppTiming.pressCoverHoldStep)
+            }
             // The panel's picture of it, as it looks now its menu is gone,
             // filmed under the cover. Not at the cap: still open, the item
             // is drawn highlighted.
@@ -390,10 +394,11 @@ final class ItemPress {
     @discardableResult
     private func waitUntilGone(
         _ key: ItemID, sign: Sign, pid: pid_t, before: WindowCounts, geometry: Geometry,
-        run: Run, elapsed ms: () -> Int
+        run: Run, hold: () -> Void, elapsed ms: () -> Int
     ) async -> Bool {
         let cap = Date().addingTimeInterval(sign == .appInFront ? AppTiming.pressFrontCap : AppTiming.pressMenuCap)
         while Date() < run.capped(cap) {
+            hold()
             let still: Bool
             switch sign {
             case .window: still = await Self.counts(pid: pid, geometry: geometry).elevated > before.elevated
@@ -480,9 +485,10 @@ final class ItemPress {
     /// it), within the menu wait. A yielded relay stops waiting after
     /// `pressYieldWait`: the click is already out and the item must not be
     /// put back under a menu that is still opening.
-    private func waitForSign(over before: WindowCounts, pid: pid_t, geometry: Geometry, frontCounts: Bool, run: Run) async -> Sign? {
+    private func waitForSign(over before: WindowCounts, pid: pid_t, geometry: Geometry, frontCounts: Bool, run: Run, hold: () -> Void) async -> Sign? {
         let showBy = Date().addingTimeInterval(AppTiming.pressMenuWait)
         while Date() < run.capped(showBy) {
+            hold()
             try? await Task.sleep(for: .milliseconds(30))
             let now = await Self.counts(pid: pid, geometry: geometry)
             if now.elevated > before.elevated { return .window }
