@@ -89,8 +89,9 @@ scripts/dev-install.sh --rollback                   # 换回上一个版本
 
 ## 5. 必须先问用户的事（本项目的具体化）
 
-- 替换 `/Applications/Dimble.app`：用户日常在用，装之前先说明；`dev-install.sh` 会先备份到 `~/.agents/backups/apps/`，验证备份后再替换。用户明确说「装上去看」才装。
-- 推送、合并回 `main`、改写历史、删分支。
+- 替换 `/Applications/Dimble.app`：用户日常在用。用户在任务里说了「装上去看 / 改完装上」，就等于批准这一任务的编译、测试、装机，不用再问；没说过就先问。`dev-install.sh` 会先备份到 `~/.agents/backups/apps/`、验证备份后再替换，随时可用 `--rollback` 退回。装完要告诉用户怎么测。
+- **一个检查点**：用户实机测完说「没问题」，就是一次批准「提交 + 推送到 `origin` 的当前（非 `main`）分支」，一次做完，不拆开再问。
+- 仍然每次单独问：推送或合并 `main`、强制推送、改写历史、删分支、同步上游、发版（`release.sh`）。
 - 全局安装依赖（`brew install xcodegen` 之类）、运行来历不明的可执行文件（`/tmp` 里的二进制先问）。
 - 发布流程 `scripts/release.sh`（公证、Sparkle 签名、appcast）：只在用户要发版时动，不要顺手改。
 - 不读不改含密钥的 `.env`、Sparkle 的 EdDSA 私钥；不把 `SPARKLE_KEY_FILE` 之类写进任何文件或回复。
@@ -106,7 +107,7 @@ scripts/dev-install.sh --rollback                   # 换回上一个版本
 - 事件监听（CGEventTap）被系统停用后需要重建，别只在回调里 re-enable。
 - 辅助功能（AX）调用在主线程时要设超时，默认 6 秒会卡死界面。
 - 修 bug 先看 `docs/REVIEW-FIXES-0.3.2.md`、`docs/ISSUE-AUDIT-0.3.0.md`，避免重复。
-- 提交说明用简洁中文；提交结尾带 Claude 协作署名；一次提交讲一件事。**不提交、不推送，除非用户说要。**
+- 提交说明用简洁中文；提交结尾带 Claude 协作署名；一次提交讲一件事。**提交和推送只在用户说「没问题 / 可以提交」之后做（见 §5 检查点），之前不提交、不推送。**
 
 ---
 
