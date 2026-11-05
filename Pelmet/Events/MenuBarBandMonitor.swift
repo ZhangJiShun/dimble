@@ -73,7 +73,10 @@ final class MenuBarBandMonitor {
     private var screenGeometry: [ScreenGeometry] = []
     private var screenObserver: NSObjectProtocol?
 
-    func reviveTapIfDead() { pointerTap?.reviveIfDead() }
+    func reviveTapIfDead() {
+        pointerTap?.reviveIfDead()
+        dragRedirect.reviveIfDead()
+    }
 
     private func rebuildScreenGeometry(retryingMisses: Bool = true) {
         // A still pointer sends no mouseMoved to re-enter the target the
@@ -321,7 +324,7 @@ final class MenuBarBandMonitor {
     func stop() {
         pointerTap?.stop()
         pointerTap = nil
-        dragRedirect.disarm()
+        dragRedirect.stop()
         panelDropZone = nil
         if let localDownMonitor { NSEvent.removeMonitor(localDownMonitor) }
         localDownMonitor = nil

@@ -332,6 +332,8 @@ final class PanelPresenter: RevealPresenter {
                       width: placed.width - window.leadingMargin, height: placed.height)
     }
 
+    func reviveTypingTapIfDead() { typingTap.reviveIfDead() }
+
     private func armTyping() {
         guard isOpen, openedByHover, let zone = glassZone else { return }
         typingTap.arm(zone: zone, window: window)

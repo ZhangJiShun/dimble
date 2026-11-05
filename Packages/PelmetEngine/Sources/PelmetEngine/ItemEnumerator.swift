@@ -434,8 +434,7 @@ public actor ItemEnumerator {
         let explicit = value(app, kAXExtrasMenuBarAttribute)
             .flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
         let bar = extrasBar(explicit: explicit, among: bars) { bar in
-            var size = CGSize.zero
-            let width = value(bar, kAXSizeAttribute).flatMap { AXValueGetValue($0 as! AXValue, .cgSize, &size) ? size.width : nil }
+            let width = AXValueBox.cgSize(from: value(bar, kAXSizeAttribute))?.width
             return (width, children(of: bar).map { value($0, kAXSubroleAttribute) as? String })
         }
         return bar.map { !children(of: $0).isEmpty } ?? false
@@ -523,11 +522,7 @@ public actor ItemEnumerator {
     }
 
     private func frame(of element: AXUIElement) -> CGRect? {
-        guard let value = copyAttribute(element, "AXFrame"),
-              CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
-        var rect = CGRect.zero
-        guard AXValueGetValue(value as! AXValue, .cgRect, &rect) else { return nil }
-        return rect
+        AXValueBox.cgRect(from: copyAttribute(element, "AXFrame"))
     }
 
     private func copyAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {

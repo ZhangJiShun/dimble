@@ -139,6 +139,7 @@ enum OverflowToggle {
             defer { x += 3 }
             var el: AXUIElement?
             guard AXUIElementCopyElementAtPosition(app, Float(x), 12, &el) == .success, let el else { continue }
+            AXUIElementSetMessagingTimeout(el, 0.25)
             var roleV: CFTypeRef?
             AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &roleV)
             guard roleV as? String == "AXButton" else { continue }
@@ -158,12 +159,10 @@ enum OverflowToggle {
         var posV: CFTypeRef?
         var sizeV: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posV) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeV) == .success
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeV) == .success,
+              let p = AXValueBox.cgPoint(from: posV),
+              let s = AXValueBox.cgSize(from: sizeV)
         else { return nil }
-        var p = CGPoint.zero
-        var s = CGSize.zero
-        AXValueGetValue(posV as! AXValue, .cgPoint, &p)
-        AXValueGetValue(sizeV as! AXValue, .cgSize, &s)
         return CGRect(origin: p, size: s)
     }
 

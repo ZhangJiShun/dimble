@@ -19,6 +19,7 @@
 // type-to-search as it is.
 
 import AppKit
+import PelmetCore
 import PelmetEngine
 
 nonisolated final class HoverTypingTap: @unchecked Sendable {
@@ -39,6 +40,8 @@ nonisolated final class HoverTypingTap: @unchecked Sendable {
     private var keyObservers: [NSObjectProtocol] = []
     private var focusMonitor: Any?
     private var tap: CFMachPort?
+    private var tapSource: CFRunLoopSource?
+    private var tapRunLoop: CFRunLoop?
     private let onType: @MainActor (String) -> Void
 
     init(onType: @escaping @MainActor (String) -> Void) {
@@ -57,6 +60,7 @@ nonisolated final class HoverTypingTap: @unchecked Sendable {
     /// `keepingPresses`: re-armed for the grace after the first key, whose
     /// release is still to come and must not reach the app in front.
     func arm(zone: CGRect, window: NSWindow?, keepingPresses: Bool = false) -> Bool {
+        reviveIfDead()
         if tap == nil, !start() { return false }
         if keyObservers.isEmpty { observeKeyWindows() }
         let height = NSScreen.screens.first?.frame.height ?? 0
@@ -145,6 +149,39 @@ nonisolated final class HoverTypingTap: @unchecked Sendable {
         if idle, let tap { CGEvent.tapEnable(tap: tap, enable: false) }
     }
 
+    /// A tap the system dropped (Accessibility revoked and granted again)
+    /// stays a non-nil object that hears nothing. Rebuild only when the port
+    /// is invalid — idle disabled is the disarmed state, not a dead tap.
+    func reviveIfDead() {
+        let dead = lock.withLock {
+            EventTapHealth.needsRebuild(tapExists: tap != nil, isValid: tap.map { CFMachPortIsValid($0) } ?? false)
+        }
+        guard dead else { return }
+        stop()
+        _ = start()
+    }
+
+    func stop() {
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let tapRunLoop, let tapSource {
+            CFRunLoopRemoveSource(tapRunLoop, tapSource, .commonModes)
+            CFRunLoopStop(tapRunLoop)
+        }
+        tap = nil
+        tapSource = nil
+        tapRunLoop = nil
+        if !keyObservers.isEmpty {
+            for observer in keyObservers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            keyObservers = []
+        }
+        if let focusMonitor {
+            NSEvent.removeMonitor(focusMonitor)
+            self.focusMonitor = nil
+        }
+    }
+
     private func start() -> Bool {
         let mask = [CGEventType.keyDown, .keyUp]
             .reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
@@ -165,8 +202,12 @@ nonisolated final class HoverTypingTap: @unchecked Sendable {
         }
         CGEvent.tapEnable(tap: tap, enable: false)
         self.tap = tap
-        let thread = Thread {
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0), .commonModes)
+        let thread = Thread { [weak self] in
+            guard let self, let tap = self.tap else { return }
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            self.tapSource = source
+            self.tapRunLoop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
             CFRunLoopRun()
         }
         thread.qualityOfService = .userInteractive

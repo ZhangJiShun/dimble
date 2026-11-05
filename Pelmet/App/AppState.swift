@@ -134,9 +134,14 @@ final class AppState {
     private var statusItem: PelmetStatusItem?
     private var separators: SeparatorManager?
     private(set) var helperHosts: HelperHosts?
-    /// Set once the first converge has run: helper registrations before it
-    /// are covered by the boot wait, later ones need an adoption window.
+    /// Gate for engine work: true after `engine.start`, false before boot
+    /// and after `beginTermination`. Late Tasks must not call `setModel`.
+    /// Helper registrations before the first converge are covered by the
+    /// boot wait; later ones need an adoption window.
     private var engineStarted = false
+    /// Sticky: `beginTermination` sets this and never clears it. Boot must
+    /// not raise `engineStarted` again if quit landed mid-await.
+    private var terminating = false
     private var extras: ExtrasManager?
     private var bandMonitor: MenuBarBandMonitor?
     private var clockRelay: ClockClickRelay?
@@ -1009,6 +1014,7 @@ final class AppState {
             await helperHosts?.waitUntilHosted()
             await waitForOwnItemAdoption()
             await engine.start()
+            guard !terminating else { return }
             engineStarted = true
             // Extras change size inside the same agent reflow as assertion
             // swaps — the only way their motion matches everything else's.
@@ -1038,7 +1044,9 @@ final class AppState {
             // (see TransitionCoordinator.takeBootPicture). The converge
             // below is what conceals.
             await transitions.takeBootPicture(from: launchSnapshot)
+            guard engineStarted, !terminating else { return }
             await engine.setModel(settings.sectionModel)
+            guard !terminating else { return }
             updateSnapshot(await engine.snapshot())
             // Startup state: everything the model says is hidden, is hidden.
             dispatch(rehide.handle(.concealRequested))
@@ -1097,6 +1105,8 @@ final class AppState {
     }
 
     func beginTermination() {
+        terminating = true
+        engineStarted = false
         rehideTimer?.invalidate()
         eventTask?.cancel()
         // A change made in the last 300 ms is still waiting on the debounce
@@ -1753,8 +1763,10 @@ final class AppState {
         // Taps built before a revoke can be dead objects now.
         clockRelay?.reviveIfDead()
         bandMonitor?.reviveTapIfDead()
+        panelPresenter.reviveTypingTapIfDead()
         clockRelay?.setEnabled(settings.clockClickOpensNotificationCenter)
         Task {
+            guard engineStarted else { return }
             updateSnapshot(await engine.snapshot())
             await engine.setModel(settings.sectionModel)
             dispatch(rehide.handle(.concealRequested))
@@ -2264,7 +2276,7 @@ final class AppState {
         settingsApplyWork?.cancel()
         settingsApplyWork = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self, self.engineStarted else { return }
             self.settings.save()
             await self.engine.setSteadyExtras(self.settings.effectiveHideSystemExtras)
             await self.engine.setModel(self.settings.sectionModel)
@@ -2532,14 +2544,15 @@ final class AppState {
         twin.setShown(true)
     }
 
-    /// A move asked for outside the editor (the command bar). Membership
-    /// alone leaves the icon where it sits, left of the chevron for a newly
-    /// visible one (2026-10-04), so it is drawn at the chevron side of its
-    /// new section and applied at once. Edits the editor already holds stay
-    /// the person's to apply: then the move only joins them.
+    /// A move asked for outside the editor (the command bar, the panel's
+    /// menu). Membership alone leaves the icon where it sits, left of the
+    /// chevron for a newly visible one (2026-10-04), so it is drawn at the
+    /// end of its new section and applied at once: for Visible that is the
+    /// far end, ahead of Control Center and the clock (`moveItem` clamps it),
+    /// not jammed against the chevron (2026-10-29). Edits the editor already
+    /// holds stay the person's to apply: then the move only joins them.
     func moveItemNow(_ id: ItemID, to section: PelmetCore.Section, quiet: Bool = false) {
-        let before = section == .visible ? editorItems(in: .visible).first { $0.id != id }?.id : nil
-        moveItemNow(id, to: section, before: before, quiet: quiet)
+        moveItemNow(id, to: section, before: nil, quiet: quiet)
     }
 
     /// The same move with a place in its section: in front of `before` (nil is
@@ -2725,6 +2738,7 @@ final class AppState {
         // Extras visibility applies via the engine's reflow companion during
         // the converge below — same reflow, same motion as everything else.
         Task {
+            guard engineStarted else { return }
             await engine.setModel(model)
             // The plist hint seeds slots for FUTURE fresh registrations
             // (app relaunches, brand-new items); live items move at Apply.
@@ -5037,6 +5051,7 @@ final class AppState {
             // sections; its host follows the section (see `moveItem`).
             separators?.sync(with: settings.separators)
             Task {
+                guard engineStarted else { return }
                 await engine.setModel(result.model)
                 // M2 (docs/CORE-SETS.md): a user drag or membership change
                 // is what goes stale in the own-item order hint — the media
@@ -5159,6 +5174,7 @@ final class AppState {
             // then re-converge so the change (or a known bundle rejoining the
             // allowlist) takes effect.
             Task {
+                guard engineStarted else { return }
                 let registered = registerNewItems(from: await engine.snapshot())
                 // The walk behind a swap fires this for every transition
                 // (concealed items leave and rejoin AX). Converging on it
@@ -5166,6 +5182,7 @@ final class AppState {
                 // for nothing; a known bundle rejoining the allowlist is
                 // picked up by the next converge, a new one is routed now.
                 if !isTransitioning || !registered.isEmpty {
+                    guard engineStarted else { return }
                     await engine.setModel(settings.sectionModel)
                 }
                 updateSnapshot(await engine.snapshot())
@@ -5191,7 +5208,10 @@ final class AppState {
             // Recovery: force a real converge. (A `.concealRequested` through
             // the rehide machine was a no-op from `.concealed` — the exact
             // state an external teardown usually finds us in.)
-            Task { await engine.setModel(settings.sectionModel) }
+            Task {
+                guard engineStarted else { return }
+                await engine.setModel(settings.sectionModel)
+            }
         case .availabilityChanged(let available):
             engineCanHide = available
         case .convergeFailed:

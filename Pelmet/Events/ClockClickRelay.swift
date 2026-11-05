@@ -402,8 +402,11 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
     /// backdrop mid-reflow).
     @MainActor static func otherBarItem(at point: CGPoint) -> String? {
         var element: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
+        let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, 0.3)
+        guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element) == .success,
               let element else { return nil }
+        AXUIElementSetMessagingTimeout(element, 0.3)
         var role: CFTypeRef?
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
         guard role as? String == kAXMenuBarItemRole else { return nil }

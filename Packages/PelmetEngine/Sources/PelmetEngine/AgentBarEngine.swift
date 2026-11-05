@@ -139,6 +139,9 @@ public actor AgentBarEngine: MenuBarEngine {
     /// (review B5).
     private var setAsideConcealed: Set<ItemID> = []
     private var started = false
+    /// Set by `stop()`. `started` stays true (single-use: a later start is
+    /// a no-op); work only runs while started && !stopped.
+    private var stopped = false
     /// Actor reentrancy guard: converge() suspends several times, and a stale
     /// converge resuming after a newer one must not activate an outdated
     /// assertion or stamp an outdated concealed set. Each converge takes a
@@ -193,7 +196,7 @@ public actor AgentBarEngine: MenuBarEngine {
     // MARK: - Lifecycle
 
     public func start() async {
-        guard !started else { return }
+        guard !started, !stopped else { return }
         started = true
         observeSession()
         _ = await refreshSnapshot()
@@ -202,8 +205,12 @@ public actor AgentBarEngine: MenuBarEngine {
     /// TERMINAL: finishing the event stream is irreversible, so the engine is
     /// single-use — one instance per app lifetime. `started` deliberately
     /// stays true so a later `start()` is a no-op instead of running with a
-    /// dead stream.
+    /// dead stream. `stopped` is what late `setModel` (and any converge)
+    /// checks: work only while started && !stopped.
     public func stop() async {
+        stopped = true
+        emptyAXRetry?.cancel()
+        emptyAXRetry = nil
         for (center, token) in sessionObservers { center.removeObserver(token) }
         sessionObservers = []
         invalidateAssertion()
@@ -221,17 +228,20 @@ public actor AgentBarEngine: MenuBarEngine {
     }
 
     public func setModel(_ model: SectionModel) async {
+        guard EngineLifecycle.engineAcceptsWork(started: started, stopped: stopped) else { return }
         self.model = model
         await converge()
     }
 
     public func setSteadyExtras(_ enabled: Bool) async {
+        guard EngineLifecycle.engineAcceptsWork(started: started, stopped: stopped) else { return }
         guard steadyExtras != enabled else { return }
         steadyExtras = enabled
         await converge()
     }
 
     public func reveal(_ sections: Set<Section>) async {
+        guard EngineLifecycle.engineAcceptsWork(started: started, stopped: stopped) else { return }
         revealedSections.formUnion(sections)
         await converge()
     }
@@ -240,6 +250,7 @@ public actor AgentBarEngine: MenuBarEngine {
     /// one swap. `reveal` only adds, so narrowing by a conceal and a fresh
     /// reveal reflowed the bar twice.
     public func narrowReveal(to sections: Set<Section>) async {
+        guard EngineLifecycle.engineAcceptsWork(started: started, stopped: stopped) else { return }
         revealedSections.formIntersection(sections)
         await converge()
     }
@@ -247,6 +258,7 @@ public actor AgentBarEngine: MenuBarEngine {
     /// Reveal these items only: their bundles leave the concealable set,
     /// every section stays as it is, nothing else reflows.
     public func reveal(items: Set<ItemID>) async {
+        guard EngineLifecycle.engineAcceptsWork(started: started, stopped: stopped) else { return }
         revealedItems.formUnion(items)
         companionMute.enter()
         await converge()
@@ -256,6 +268,7 @@ public actor AgentBarEngine: MenuBarEngine {
     /// Put these items back after an item-only reveal. Sections revealed
     /// meanwhile (a hover) stay as they are.
     public func conceal(items: Set<ItemID>) async {
+        guard EngineLifecycle.engineAcceptsWork(started: started, stopped: stopped) else { return }
         revealedItems.subtract(items)
         companionMute.enter()
         await converge()
@@ -269,6 +282,7 @@ public actor AgentBarEngine: MenuBarEngine {
     /// The items show rules want on the bar right now. Sections stay as
     /// they are, like an item-only reveal.
     public func setRuleShown(_ items: Set<ItemID>) async {
+        guard EngineLifecycle.engineAcceptsWork(started: started, stopped: stopped) else { return }
         guard items != ruleShownItems else { return }
         ruleShownItems = items
         companionMute.enter()
@@ -283,6 +297,7 @@ public actor AgentBarEngine: MenuBarEngine {
     /// `conceal()` that also takes back icons Show in Menu Bar brought out on
     /// their own, in one swap instead of two.
     public func conceal(releasing items: Set<ItemID>) async {
+        guard EngineLifecycle.engineAcceptsWork(started: started, stopped: stopped) else { return }
         revealedItems.subtract(items)
         // Nothing revealed but items: no section changes, the extras stay.
         let muted = revealedSections.isEmpty && !revealedItems.isEmpty
@@ -411,6 +426,7 @@ public actor AgentBarEngine: MenuBarEngine {
     /// allowlist from (model, revealedSections) and swaps the assertion in a
     /// single transition.
     private func converge() async {
+        guard EngineLifecycle.engineAcceptsWork(started: started, stopped: stopped) else { return }
         convergeEpoch += 1
         let epoch = convergeEpoch
         timing = ConvergeTiming()
@@ -507,6 +523,7 @@ public actor AgentBarEngine: MenuBarEngine {
     /// reads empty for up to 40s), then back off; they stop while the
     /// session is locked. 2s flat walked the agent tree all night (≈14k).
     private func deferEmptyWalkRetry() {
+        guard !stopped else { return }
         if emptyAXSince == nil { emptyAXSince = Date() }
         guard emptyAXRetry == nil else { return }
         if sessionAway, Self.sessionDictionarySaysAway {
@@ -535,6 +552,7 @@ public actor AgentBarEngine: MenuBarEngine {
             try? await Task.sleep(for: delay)
             // Cancelled by a restart that converges itself.
             guard !Task.isCancelled else { return }
+            guard !stopped else { return }
             self.emptyAXRetry = nil
             await self.converge()
         }

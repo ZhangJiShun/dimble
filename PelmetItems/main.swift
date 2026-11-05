@@ -136,7 +136,7 @@ final class ItemsHost: NSObject, NSApplicationDelegate {
         }
         button.alphaValue = CGFloat(spec.alpha)
         button.appearsDisabled = false
-        if let length = spec.length { item.length = CGFloat(length) }
+        item.length = CGFloat(SeparatorLength.appliedLength(hostedLength: spec.length))
     }
 
     private func unhost(_ title: String) {

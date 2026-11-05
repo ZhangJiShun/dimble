@@ -96,7 +96,7 @@ final class SeparatorManager {
             title: spec.itemTitle,
             kind: .separator,
             text: spec.style == .space ? "" : spec.style.rawValue,
-            length: spec.style == .space ? spec.width : nil,
+            length: spec.hostedLength,
             alpha: spec.style == .space ? 0 : spec.opacity
         )
     }
@@ -111,10 +111,15 @@ final class SeparatorManager {
         }
         for spec in specs {
             if let existing = items[spec.id] {
-                // Width is the item's own length, not the button's — a spacer
-                // dragged down the slider stays its old size otherwise.
-                if spec.style == .space, existing.length != spec.width {
-                    existing.length = spec.width
+                // Width is the item's own length, not the button's. A spacer
+                // dragged down the slider, or a style switch off a spacer,
+                // must overwrite leftover length (spacer→glyph leaves 32pt
+                // otherwise).
+                if SeparatorLength.needsLengthWrite(
+                    currentLength: Double(existing.length),
+                    hostedLength: spec.hostedLength
+                ) {
+                    existing.length = CGFloat(SeparatorLength.appliedLength(hostedLength: spec.hostedLength))
                 }
                 configure(existing.button, spec: spec)
             } else {
@@ -131,7 +136,7 @@ final class SeparatorManager {
 
     private func makeItem(for spec: SeparatorSpec) -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(
-            withLength: spec.style == .space ? spec.width : NSStatusItem.variableLength
+            withLength: CGFloat(SeparatorLength.appliedLength(hostedLength: spec.hostedLength))
         )
         item.autosaveName = spec.itemTitle
         item.button?.setAccessibilityTitle(spec.itemTitle)
@@ -195,7 +200,7 @@ final class SeparatorManager {
     }
 
     private static func shownLength(for spec: SeparatorSpec) -> CGFloat {
-        spec.style == .space ? 14 : NSStatusItem.variableLength
+        CGFloat(SeparatorLength.appliedLength(hostedLength: spec.hostedLength))
     }
 
     private func setVisible(_ visible: Bool, for id: UUID, item: NSStatusItem, spec: SeparatorSpec) {

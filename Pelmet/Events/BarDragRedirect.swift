@@ -16,6 +16,7 @@
 // otherwise, so no other mouse event ever passes through it.
 
 import AppKit
+import PelmetCore
 import PelmetEngine
 
 nonisolated final class BarDragRedirect: @unchecked Sendable {
@@ -32,10 +33,13 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
     private var pointer: CGPoint?
     private var height: CGFloat = 0
     private var tap: CFMachPort?
+    private var tapSource: CFRunLoopSource?
+    private var tapRunLoop: CFRunLoop?
 
     /// `zone` and `anchor` in Cocoa screen points (y up).
     @MainActor
     func arm(zone: CGRect, anchor: CGPoint) -> Bool {
+        reviveIfDead()
         if tap == nil, !start() { return false }
         let height = NSScreen.screens.first?.frame.height ?? 0
         lock.withLock {
@@ -81,6 +85,29 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
     }
 
+    /// A tap the system dropped (Accessibility revoked and granted again)
+    /// stays a non-nil object that hears nothing. Rebuild only when the port
+    /// is invalid — idle disabled is the disarmed state, not a dead tap.
+    func reviveIfDead() {
+        let dead = lock.withLock {
+            EventTapHealth.needsRebuild(tapExists: tap != nil, isValid: tap.map { CFMachPortIsValid($0) } ?? false)
+        }
+        guard dead else { return }
+        stop()
+        _ = start()
+    }
+
+    func stop() {
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let tapRunLoop, let tapSource {
+            CFRunLoopRemoveSource(tapRunLoop, tapSource, .commonModes)
+            CFRunLoopStop(tapRunLoop)
+        }
+        tap = nil
+        tapSource = nil
+        tapRunLoop = nil
+    }
+
     private func start() -> Bool {
         let mask = [CGEventType.leftMouseDragged, .leftMouseUp]
             .reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
@@ -101,8 +128,12 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
         }
         CGEvent.tapEnable(tap: tap, enable: false)
         self.tap = tap
-        let thread = Thread {
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0), .commonModes)
+        let thread = Thread { [weak self] in
+            guard let self, let tap = self.tap else { return }
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            self.tapSource = source
+            self.tapRunLoop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
             CFRunLoopRun()
         }
         thread.qualityOfService = .userInteractive
