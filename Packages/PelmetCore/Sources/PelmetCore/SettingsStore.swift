@@ -657,7 +657,13 @@ public struct SettingsStore: Codable, Equatable, Sendable {
 
     private static let defaultsKey = "app.fif7y.Pelmet.settings.v1"
 
-    public static func load(defaults: UserDefaults = .standard) -> SettingsStore {
+    /// Where `load()` and `save()` read and write when no store is passed.
+    /// The app's test host points it at a suite of its own: it shares the
+    /// bundle ID with the installed Dimble, and a test run otherwise read
+    /// the real settings and saved them back over the user's (2026-11-09).
+    nonisolated(unsafe) public static var storage: UserDefaults = .standard
+
+    public static func load(defaults: UserDefaults = SettingsStore.storage) -> SettingsStore {
         guard
             let data = defaults.data(forKey: defaultsKey),
             let store = try? JSONDecoder().decode(SettingsStore.self, from: data)
@@ -665,7 +671,7 @@ public struct SettingsStore: Codable, Equatable, Sendable {
         return store
     }
 
-    public func save(defaults: UserDefaults = .standard) {
+    public func save(defaults: UserDefaults = SettingsStore.storage) {
         guard let data = try? JSONEncoder().encode(self) else { return }
         defaults.set(data, forKey: Self.defaultsKey)
     }

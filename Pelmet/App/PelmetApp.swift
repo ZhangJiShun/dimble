@@ -2,6 +2,7 @@
 // Agent app (LSUIElement): no dock icon; lives in the menubar. Settings and
 // onboarding windows activate the app transiently.
 
+import PelmetCore
 import PelmetEngine
 import SwiftUI
 
@@ -23,15 +24,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Order matters: bundle relocation before any TCC-relevant work, then
     // defaults migration before AppState's property initializers call
     // SettingsStore.load().
+    /// Launched as PelmetTests' host: same bundle ID as the installed
+    /// Dimble, so it must neither touch the user's settings nor run a second
+    /// engine against their bar (2026-11-09: the host read the real
+    /// settings, fought for the helper port and saved on quit).
+    static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     override init() {
-        relaunching = BundleRelocation.relocateIfNeeded()
-        NookMigration.runIfNeeded()
+        if Self.isTestHost {
+            let suite = "app.fif7y.Pelmet.tests"
+            UserDefaults().removePersistentDomain(forName: suite)
+            SettingsStore.storage = UserDefaults(suiteName: suite) ?? .standard
+            relaunching = false
+        } else {
+            relaunching = BundleRelocation.relocateIfNeeded()
+            NookMigration.runIfNeeded()
+        }
         appState = AppState()
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard !relaunching else { return }
+        guard !relaunching, !Self.isTestHost else { return }
         BundleRelocation.reregisterLoginItemIfRelocated()
         appState.start()
         if let tab = AppLanguage.takeReopenSettingsTab() {
@@ -43,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The instance that just renamed the bundle never started AppState,
         // so beginTermination would never reply and it would stay running
         // beside the relaunched one.
-        guard !relaunching else { return .terminateNow }
+        guard !relaunching, !Self.isTestHost else { return .terminateNow }
         appState.beginTermination()
         return .terminateLater
     }
