@@ -195,8 +195,11 @@ final class FocusStatus {
         }
     }
 
-    nonisolated static func run(_ arguments: [String]) -> [String] {
+    /// `qualityOfService`: how the child is scheduled (a long replay of the
+    /// log runs at `.background`); unset it inherits the caller's.
+    nonisolated static func run(_ arguments: [String], qualityOfService: QualityOfService? = nil) -> [String] {
         let process = Process()
+        if let qualityOfService { process.qualityOfService = qualityOfService }
         if let tool = arguments.first, tool.hasPrefix("/") {
             process.executableURL = URL(fileURLWithPath: tool)
             process.arguments = Array(arguments.dropFirst())
@@ -335,13 +338,13 @@ enum ControlCenterFocus {
         let own = attribute(element, kAXIdentifierAttribute).flatMap { $0.hasPrefix("module-") ? [String($0.dropFirst(7))] : nil } ?? []
         guard depth > 0 else { return own }
         var children: AnyObject?
-        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
+        axCopyAttribute(element, kAXChildrenAttribute as CFString, &children)
         return own + ((children as? [AXUIElement]) ?? []).flatMap { modules(in: $0, depth: depth - 1) }
     }
 
     nonisolated private static func attribute(_ element: AXUIElement, _ name: String) -> String? {
         var value: AnyObject?
-        AXUIElementCopyAttributeValue(element, name as CFString, &value)
+        axCopyAttribute(element, name as CFString, &value)
         return value as? String
     }
 
@@ -349,7 +352,7 @@ enum ControlCenterFocus {
         if matches(element) { return element }
         guard depth > 0 else { return nil }
         var children: AnyObject?
-        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
+        axCopyAttribute(element, kAXChildrenAttribute as CFString, &children)
         for child in (children as? [AXUIElement]) ?? [] {
             if let hit = find(in: child, depth: depth - 1, where: matches) { return hit }
         }

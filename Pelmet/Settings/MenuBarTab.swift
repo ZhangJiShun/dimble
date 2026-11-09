@@ -474,7 +474,9 @@ private struct ItemTile: View {
 
     /// This tile's "Show when it matters" rule, when it has one.
     private var showWhen: ShowWhenRule? {
-        ShowWhenSubject(item.id).map { ShowWhenRule(subject: $0, appState: appState) }
+        ShowWhenSubject(item.id).flatMap {
+            $0.offersRule(appState.settings.extraItems) ? ShowWhenRule(subject: $0, appState: appState) : nil
+        }
     }
 
     /// The inactive-icon hover card is what these tiles show; a click has
@@ -835,7 +837,7 @@ private struct RuleMark: View {
     var body: some View {
         Image(systemName: "bolt.fill")
             .font(.system(size: 7, weight: .bold))
-            .foregroundStyle(.white)
+            .foregroundStyle(PelmetAccent.onFill)
             .frame(width: 13, height: 13)
             .background(Circle().fill(PelmetAccent.accent))
             .padding(2)
@@ -996,14 +998,29 @@ private struct PelmetItemsStrip: View {
         )
     }
 
-    /// Media's "While playing" or "Always shows": an indicator like the
-    /// camera's, so it lives on its own row, not in Show when it matters.
+    /// Media's "While playing" or "Always shows" (the timer's "While a timer
+    /// runs"): an indicator like the camera's, so it lives on its own row,
+    /// not in Show when it matters.
     private func ruleBinding(_ kind: ExtraKind) -> Binding<ExtraShowRule> {
         Binding(
             get: { appState.settings.extraItems.first { $0.kind == kind }?.resolvedShowRule ?? kind.defaultShowRule },
             set: { rule in
                 guard let index = appState.settings.extraItems.firstIndex(where: { $0.kind == kind }) else { return }
                 appState.settings.extraItems[index].showRule = rule
+                appState.settingsChanged()
+            }
+        )
+    }
+
+    /// Focus and Time Machine's own row: "While a Focus is on" (or "While
+    /// backing up") takes the idle icon off the bar, like the Timer's. The
+    /// card's Show when it matters rule is a separate choice it leaves alone.
+    private func onlyWhileActiveBinding(_ kind: ExtraKind) -> Binding<ExtraShowRule> {
+        Binding(
+            get: { appState.settings.extraItems.first { $0.kind == kind }?.isOnlyWhileActive == true ? .whenActive : .always },
+            set: { rule in
+                guard let index = appState.settings.extraItems.firstIndex(where: { $0.kind == kind }) else { return }
+                appState.settings.extraItems[index].onlyWhileActive = rule == .whenActive ? true : nil
                 appState.settingsChanged()
             }
         )
@@ -1064,6 +1081,14 @@ private struct PelmetItemsStrip: View {
                         : "Know when your camera, mic or SharePlay is on. Without Screen Recording the hidden icons flash by for an instant when you click it.",
                     isOn: hasKind(.cameraMicIndicator)
                 ) { toggleKind(.cameraMicIndicator, on: $0) }
+                // While live mode draws the pills themselves, no stand-in (`liveActivities`).
+                if appState.settings.offersLiveActivityItem(screenRecording: appState.screenRecordingGranted) {
+                    PelmetItemRow(
+                        symbol: ExtrasManager.liveActivitySymbol, title: "Live Activities",
+                        caption: "See when a Live Activity is running and bring it back in a click.",
+                        isOn: hasKind(.liveActivity)
+                    ) { toggleKind(.liveActivity, on: $0) }
+                }
                 PelmetItemRow(
                     symbol: "siri", title: "Siri",
                     caption: "Siri, as an icon you can move. Replaces Apple's while it's on.",
@@ -1077,17 +1102,23 @@ private struct PelmetItemsStrip: View {
                 PelmetItemRow(
                     symbol: "timer", title: "Timer",
                     caption: "A countdown that stays in view and rings when it ends.",
-                    isOn: hasKind(.timer)
+                    isOn: hasKind(.timer),
+                    rule: ruleBinding(.timer),
+                    whileActive: "While a timer runs"
                 ) { toggleKind(.timer, on: $0) }
                 PelmetItemRow(
                     symbol: ShowWhenSubject.focus.symbol, title: ShowWhenSubject.focus.title,
                     caption: "See which Focus is on and switch it in a click.",
-                    isOn: hasKind(.focus)
+                    isOn: hasKind(.focus),
+                    rule: onlyWhileActiveBinding(.focus),
+                    whileActive: "While a Focus is on"
                 ) { toggleKind(.focus, on: $0) }
                 PelmetItemRow(
                     symbol: ShowWhenSubject.timeMachine.symbol, title: ShowWhenSubject.timeMachine.title,
                     caption: "Your last backup at a glance, back up now. Replaces Apple's while it's on.",
-                    isOn: hasKind(.timeMachine)
+                    isOn: hasKind(.timeMachine),
+                    rule: onlyWhileActiveBinding(.timeMachine),
+                    whileActive: "While backing up"
                 ) { toggleKind(.timeMachine, on: $0) }
                 PelmetItemRow(
                     symbol: "", image: ExtraGlyph.airdrop, title: "AirDrop",
@@ -1126,17 +1157,53 @@ private struct PelmetItemsStrip: View {
             .pelmetCardSurface()
 
             systemExtras
+
+            liveActivities
         }
+    }
+
+    /// Live mode (`LiveMirror`). It needs Screen Recording for the picture
+    /// it holds the bar under: without it the switch shows off and can't be
+    /// turned, the row says why, and the stored choice waits. While it's off
+    /// or can't run, the Live Activities item above is offered instead.
+    private var liveActivities: some View {
+        let recording = appState.screenRecordingGranted
+        return SettingRow(
+            title: "Show Live Activities",
+            caption: "Their pills show next to the «, and hidden system icons come back."
+        ) {
+            SettingSwitch(isOn: Binding(
+                get: { recording && appState.settings.showLiveActivities },
+                set: {
+                    appState.settings.showLiveActivities = $0
+                    appState.settingsChanged()
+                }
+            ))
+            .disabled(!recording)
+        }
+        .detail {
+            if !recording {
+                ScreenRecordingNeeded(reason: "Dimble needs Screen Recording to show the pill.")
+            }
+        }
+        .screenRecordingHelp("Needs Screen Recording. Dimble draws the pill from a picture of the menu bar.", when: !recording)
+        .pelmetCardSurface()
+        .settingAnchor("liveActivities")
     }
 
     /// Apple's Now Playing, camera controls, AirDrop, Focus and Timer hide
     /// whenever any icon is concealed. The choice of what the revealed bar
-    /// does with them only exists while no Pelmet item stands in for one:
-    /// once one does, Apple's stay hidden whatever the choice says, so the row
-    /// gives way to a line saying so.
+    /// does with them only exists while none of `collateralRows` is on: macOS
+    /// hides them together, so one Dimble item keeps them all hidden whatever
+    /// the choice says. The row gives way to a line naming the items that are
+    /// on, the ones to turn off to get the choice back.
     @ViewBuilder private var systemExtras: some View {
         if appState.settings.replacesCollateralExtras {
-            Text("Dimble's items stand in for Apple's Now Playing, camera controls, AirDrop, Focus and Timer, so Apple's stay hidden.")
+            let items = ExtraKind.collateralRows.filter { hasKind($0.kind) }.map(\.title)
+            let names = ListFormatter.localizedString(byJoining: items)
+            Text(items.count == 1
+                ? "Apple's Now Playing, camera controls, AirDrop, Focus and Timer stay hidden while Dimble's \(names) is on."
+                : "Apple's Now Playing, camera controls, AirDrop, Focus and Timer stay hidden while Dimble's \(names) are on.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1217,8 +1284,10 @@ private struct PelmetItemRow: View {
     /// Static or animated glyph (media controls only), offered once the
     /// item is on — the same in-row borderless menu the launcher rows use.
     var style: Binding<ExtraStyle>? = nil
-    /// While playing or always (media controls only), same menu, same moment.
+    /// While playing or always (media controls, and the timer, Focus and
+    /// Time Machine with their own words), same menu, same moment.
     var rule: Binding<ExtraShowRule>? = nil
+    var whileActive: LocalizedStringKey = "While playing"
     let onToggle: (Bool) -> Void
 
     var body: some View {
@@ -1228,7 +1297,7 @@ private struct PelmetItemRow: View {
             if isOn, let rule {
                 PelmetMenuPicker(
                     selection: rule,
-                    options: [(.whenActive, "While playing"), (.always, "Always shows")],
+                    options: [(.whenActive, whileActive), (.always, "Always shows")],
                     borderless: true
                 )
             }
@@ -1733,5 +1802,21 @@ private struct SeparatorOptions: View {
         case .dash: "Dash"
         case .space: "Invisible spacer"
         }
+    }
+}
+
+extension ExtraKind {
+    /// `collateralReplicas` in their Settings order, named as their rows are.
+    static var collateralRows: [(kind: ExtraKind, title: String)] {
+        [
+            (.mediaControls, String(localized: "Media controls")),
+            (.cameraMicIndicator, String(localized: "Camera & mic indicator")),
+            (.quickNote, String(localized: "Quick Note")),
+            (.timer, String(localized: "Timer")),
+            (.focus, String(localized: "Focus")),
+            (.airdrop, String(localized: "AirDrop")),
+            (.userSwitching, String(localized: "Fast user switching")),
+            (.shortcutsMenu, String(localized: "Shortcuts")),
+        ]
     }
 }

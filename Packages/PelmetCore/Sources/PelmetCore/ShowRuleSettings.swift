@@ -8,21 +8,46 @@
 import Foundation
 
 /// When Battery shows on the bar from a hidden section.
+/// In the order the menu lists them. A value an older build can't read falls
+/// back to `onBattery` there, for that field alone.
 public enum BatteryShowCondition: String, Codable, CaseIterable, Sendable {
     /// Whenever the Mac runs on its battery.
     case onBattery
     /// Running on the battery and under `lowCharge` percent.
-    case below20
+    case below20, below30, below40
+    /// Charging right now. Plugged in and full, or held at a charge limit,
+    /// isn't (#126).
+    case charging
+    /// `charging` or `below20`: the charge is worth seeing while it climbs
+    /// and when it runs low (#126).
+    case chargingOrBelow20
 
-    /// The charge `below20` is under.
-    public static let lowCharge = 20
+    /// The charge the condition is under, 0 when it reads no charge.
+    public var lowCharge: Int {
+        switch self {
+        case .below20, .chargingOrBelow20: 20
+        case .below30: 30
+        case .below40: 40
+        case .onBattery, .charging: 0
+        }
+    }
+
+    /// Whether the condition can turn while the power source stays the same.
+    public var watchesCharge: Bool { self != .onBattery }
+
+    /// Whether it can turn with the charge standing still: charging ends or
+    /// pauses at a limit without the percent moving.
+    public var watchesCharging: Bool { self == .charging || self == .chargingOrBelow20 }
 
     /// `percent` is nil when the charge can't be read: a low-charge rule
     /// stays quiet rather than guess.
-    public func isMet(onBattery: Bool, percent: Int?) -> Bool {
+    public func isMet(onBattery: Bool, percent: Int?, charging: Bool) -> Bool {
+        let low = onBattery && (percent.map { $0 < lowCharge } ?? false)
         switch self {
-        case .onBattery: onBattery
-        case .below20: onBattery && (percent.map { $0 < Self.lowCharge } ?? false)
+        case .onBattery: return onBattery
+        case .below20, .below30, .below40: return low
+        case .charging: return charging
+        case .chargingOrBelow20: return charging || low
         }
     }
 }
@@ -32,16 +57,22 @@ public struct ShowRuleSettings: Codable, Equatable, Sendable {
     /// Kept while the rule is off, so switching it back on finds the
     /// condition the person picked.
     public var batteryCondition: BatteryShowCondition = .onBattery
-    /// Wi-Fi has one condition: it is on and joined to no network.
+    /// Wi-Fi is on and joined to no network.
     public var wifiOn = false
+    /// Also while Wi-Fi is on a hotspot (#121). Kept while the rule is off,
+    /// like Battery's condition. A plain flag, so an older build ignores it.
+    public var wifiHotspot = false
 
     public init() {}
 
     /// The condition in force, nil with the rule off.
     public var battery: BatteryShowCondition? { batteryOn ? batteryCondition : nil }
 
+    /// Whether anything needs to read Wi-Fi's path for a hotspot.
+    public var wifiWatchesHotspot: Bool { wifiOn && wifiHotspot }
+
     private enum CodingKeys: String, CodingKey {
-        case batteryOn, batteryCondition, wifiOn
+        case batteryOn, batteryCondition, wifiOn, wifiHotspot
     }
 
     // Per field, like the store: a blob from before this existed, or one bad
@@ -52,6 +83,7 @@ public struct ShowRuleSettings: Codable, Equatable, Sendable {
         batteryOn = c.field(Bool.self, .batteryOn, defaults.batteryOn)
         batteryCondition = c.field(BatteryShowCondition.self, .batteryCondition, defaults.batteryCondition)
         wifiOn = c.field(Bool.self, .wifiOn, defaults.wifiOn)
+        wifiHotspot = c.field(Bool.self, .wifiHotspot, defaults.wifiHotspot)
     }
 }
 

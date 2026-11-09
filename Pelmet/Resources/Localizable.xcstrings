@@ -1683,6 +1683,64 @@
         }
       }
     },
+    "Accent color": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akzentfarbe"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Color de énfasis"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couleur d’accentuation"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Colore in risalto"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクセントカラー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "강조 색상"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cor de destaque"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цвет акцента"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "强调色"
+          }
+        }
+      }
+    },
     "Access got lost.": {
       "localizations": {
         "de": {
@@ -1978,7 +2036,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Über die Bedienungshilfen sieht Dimble die Symbole und bewegt sie, nichts verlässt deinen Mac. Bildschirmaufnahme ist optional: Sie lässt Dimble’ Animationsstile über dem Ein- und Ausblenden von macOS laufen. Es wird nichts aufgezeichnet oder gespeichert."
+            "value": "Über die Bedienungshilfen sieht Dimble die Symbole und bewegt sie, nichts verlässt deinen Mac. Bildschirmaufnahme ist optional: Sie lässt Dimbles Animationsstile über dem Ein- und Ausblenden von macOS laufen. Es wird nichts aufgezeichnet oder gespeichert."
           }
         },
         "es": {
@@ -4467,6 +4525,122 @@
         }
       }
     },
+    "Apple's Now Playing, camera controls, AirDrop, Focus and Timer stay hidden while Dimble's %@ are on.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apples „Jetzt läuft“, Kamerasteuerung, AirDrop, Fokus und Timer bleiben ausgeblendet, solange Dimbles Elemente %@ eingeschaltet sind."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ahora suena, los controles de cámara, AirDrop, los modos de concentración y el Temporizador de Apple siguen ocultos mientras los elementos %@ de Dimble estén activados."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lecture en cours, les commandes de caméra, AirDrop, Concentration et Minuteur d’Apple restent masqués tant que les éléments %@ de Dimble sont activés."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In riproduzione, i controlli fotocamera, AirDrop, Full immersion e Timer di Apple restano nascosti finché gli elementi %@ di Dimble sono attivi."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimbleの%@がオンの間、Appleの再生中、カメラコントロール、AirDrop、集中モード、タイマーは隠れたままです。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimble의 %@ 항목이 켜져 있는 동안 Apple의 지금 재생 중, 카메라 제어, AirDrop, 집중 모드, 타이머는 숨겨진 채로 있습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tocando agora, controles de câmera, AirDrop, Foco e Timer da Apple continuam ocultos enquanto os itens %@ do Dimble estiverem ativados."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "«Сейчас играет», управление камерой, AirDrop, Фокусирование и Таймер от Apple остаются скрытыми, пока включены элементы Dimble %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当 Dimble 的%@开启时，Apple 的现在播放、相机控制、隔空投送、专注模式和计时器保持隐藏。"
+          }
+        }
+      }
+    },
+    "Apple's Now Playing, camera controls, AirDrop, Focus and Timer stay hidden while Dimble's %@ is on.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apples „Jetzt läuft“, Kamerasteuerung, AirDrop, Fokus und Timer bleiben ausgeblendet, solange Dimbles Element %@ eingeschaltet ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ahora suena, los controles de cámara, AirDrop, los modos de concentración y el Temporizador de Apple siguen ocultos mientras el elemento %@ de Dimble esté activado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lecture en cours, les commandes de caméra, AirDrop, Concentration et Minuteur d’Apple restent masqués tant que l’élément %@ de Dimble est activé."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In riproduzione, i controlli fotocamera, AirDrop, Full immersion e Timer di Apple restano nascosti finché l’elemento %@ di Dimble è attivo."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimbleの%@がオンの間、Appleの再生中、カメラコントロール、AirDrop、集中モード、タイマーは隠れたままです。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimble의 %@ 항목이 켜져 있는 동안 Apple의 지금 재생 중, 카메라 제어, AirDrop, 집중 모드, 타이머는 숨겨진 채로 있습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tocando agora, controles de câmera, AirDrop, Foco e Timer da Apple continuam ocultos enquanto o item %@ do Dimble estiver ativado."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "«Сейчас играет», управление камерой, AirDrop, Фокусирование и Таймер от Apple остаются скрытыми, пока включён элемент Dimble %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当 Dimble 的%@开启时，Apple 的现在播放、相机控制、隔空投送、专注模式和计时器保持隐藏。"
+          }
+        }
+      }
+    },
     "Apply": {
       "localizations": {
         "de": {
@@ -5507,6 +5681,122 @@
           "stringUnit": {
             "state": "translated",
             "value": "图标更大、底更小，能放下更多。"
+          }
+        }
+      }
+    },
+    "Blue": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blau"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Azul"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bleu"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blu"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブルー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파란색"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Azul"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синий"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "蓝色"
+          }
+        }
+      }
+    },
+    "Brightness": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Helligkeit"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brillo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Luminosité"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Luminosità"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "明るさ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "밝기"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brilho"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Яркость"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "亮度"
           }
         }
       }
@@ -6555,6 +6845,64 @@
         }
       }
     },
+    "Choose your own": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eigene wählen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elige el tuyo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir la vôtre"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli il tuo"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "カスタム"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "직접 선택"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escolha a sua"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать свой"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自定义"
+          }
+        }
+      }
+    },
     "Click here to update Dimble to %@.": {
       "localizations": {
         "de": {
@@ -6783,6 +7131,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "点击时钟打开通知中心"
+          }
+        }
+      }
+    },
+    "Color wheel": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Farbrad"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rueda de color"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Roue chromatique"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ruota dei colori"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "カラーホイール"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "색상환"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Roda de cores"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цветовой круг"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "色轮"
           }
         }
       }
@@ -8005,6 +8411,64 @@
         }
       }
     },
+    "Dimble needs Screen Recording to show the pill.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimble braucht die Bildschirmaufnahme, um die Kapsel zu zeigen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimble necesita la grabación de pantalla para mostrar la cápsula."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimble a besoin de l’enregistrement de l’écran pour afficher la capsule."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimble ha bisogno della registrazione schermo per mostrare la capsula."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "カプセルを表示するには、Dimble に画面収録が必要です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "캡슐을 표시하려면 Dimble에 화면 기록이 필요합니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Dimble precisa da gravação de tela para mostrar a cápsula."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы показать капсулу, Dimble нужна запись экрана."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimble 需要录屏权限才能显示胶囊。"
+          }
+        }
+      }
+    },
     "Dimble stays a click away": {
       "localizations": {
         "de": {
@@ -8063,70 +8527,12 @@
         }
       }
     },
-    "Dimble's items stand in for Apple's Now Playing, camera controls, AirDrop, Focus and Timer, so Apple's stay hidden.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dimble’ Elemente ersetzen Apples „Jetzt läuft“, Kamerasteuerung, AirDrop, Fokus und Timer, die von Apple bleiben daher ausgeblendet."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Los elementos de Dimble sustituyen a Ahora suena, los controles de cámara, AirDrop, los modos de concentración y el Temporizador de Apple, así que los de Apple siguen ocultos."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Les éléments de Dimble remplacent Lecture en cours, les commandes de caméra, AirDrop, Concentration et Minuteur d’Apple, ceux d’Apple restent donc masqués."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gli elementi di Dimble sostituiscono In riproduzione, i controlli fotocamera, AirDrop, Full immersion e Timer di Apple, quindi quelli di Apple restano nascosti."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dimbleの項目が、Appleの再生中、カメラコントロール、AirDrop、集中モード、タイマーの代わりになるため、Appleのものは隠れたままです。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dimble 항목이 Apple의 지금 재생 중, 카메라 제어, AirDrop, 집중 모드, 타이머를 대신하므로 Apple의 항목은 숨겨진 채로 있습니다."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Os itens do Dimble ficam no lugar de Tocando agora, controles de câmera, AirDrop, Foco e Timer da Apple, então os da Apple continuam ocultos."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Элементы Dimble заменяют «Сейчас играет», управление камерой, AirDrop, Фокусирование и Таймер от Apple, поэтому значки Apple остаются скрытыми."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dimble 的项目替代了 Apple 的现在播放、相机控制、隔空投送、专注模式和计时器，因此 Apple 的保持隐藏。"
-          }
-        }
-      }
-    },
     "Dimble's menu from any empty spot on the bar.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dimble’ Menü von jeder freien Stelle der Leiste."
+            "value": "Dimbles Menü von jeder freien Stelle der Leiste."
           }
         },
         "es": {
@@ -8184,7 +8590,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dimble’ eigene Befehle"
+            "value": "Dimbles eigene Befehle"
           }
         },
         "es": {
@@ -8929,6 +9335,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "将图标拖放到这里"
+          }
+        }
+      }
+    },
+    "Each style needs Screen Recording. Without it, macOS slides the icons its own way.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jeder Stil braucht die Bildschirmaufnahme. Ohne sie schiebt macOS die Symbole auf seine Art herein."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cada estilo necesita la grabación de pantalla. Sin ella, macOS desliza los iconos a su manera."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chaque style nécessite l’enregistrement de l’écran. Sans lui, macOS fait glisser les icônes à sa manière."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ogni stile richiede la registrazione schermo. Senza, macOS fa scorrere le icone a modo suo."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "どのスタイルにも画面収録が必要です。ない場合は、macOS 独自のスライドでアイコンが動きます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "모든 스타일에 화면 기록이 필요합니다. 없으면 macOS가 자체 방식으로 아이콘을 밀어 넣습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cada estilo requer a gravação de tela. Sem ela, o macOS desliza os ícones do seu jeito."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Каждому стилю нужна запись экрана. Без неё macOS сдвигает значки по-своему."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每种样式都需要录屏权限。没有它时，macOS 会用自己的方式滑动图标。"
           }
         }
       }
@@ -10325,6 +10789,64 @@
         }
       }
     },
+    "Green": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grün"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verde"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vert"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verde"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "グリーン"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "초록색"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verde"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зелёный"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "绿色"
+          }
+        }
+      }
+    },
     "Grid": {
       "localizations": {
         "de": {
@@ -10495,6 +11017,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "已被其他应用占用，请录制另一个。"
+          }
+        }
+      }
+    },
+    "Hex color": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hex-Farbe"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Color hexadecimal"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couleur hexadécimale"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Colore esadecimale"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "16進カラー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "16진수 색상"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cor hexadecimal"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цвет HEX"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "十六进制颜色"
           }
         }
       }
@@ -11717,6 +12297,64 @@
         }
       }
     },
+    "Indigo": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indigo"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Índigo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indigo"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indaco"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インディゴ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "남색"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Índigo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Индиго"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "靛蓝色"
+          }
+        }
+      }
+    },
     "Input Source": {
       "localizations": {
         "de": {
@@ -12819,6 +13457,64 @@
         }
       }
     },
+    "Live Activities": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live-Aktivitäten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actividades en directo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activités en direct"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attività in tempo reale"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ライブアクティビティ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실시간 현황"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atividades ao Vivo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Активности Live"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "实时活动"
+          }
+        }
+      }
+    },
     "Lock Screen": {
       "localizations": {
         "de": {
@@ -13685,6 +14381,122 @@
           "stringUnit": {
             "state": "translated",
             "value": "你起的名字"
+          }
+        }
+      }
+    },
+    "Needs Screen Recording. Dimble animates the icons over a picture of the menu bar.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Braucht die Bildschirmaufnahme. Dimble animiert die Symbole über einem Bild der Menüleiste."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Necesita la grabación de pantalla. Dimble anima los iconos sobre una imagen de la barra de menús."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nécessite l’enregistrement de l’écran. Dimble anime les icônes par-dessus une image de la barre des menus."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Richiede la registrazione schermo. Dimble anima le icone sopra un’immagine della barra dei menu."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画面収録が必要です。Dimble はメニューバーの画像の上でアイコンをアニメーションさせます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "화면 기록이 필요합니다. Dimble은 메뉴 막대 이미지 위에서 아이콘을 움직입니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requer a gravação de tela. O Dimble anima os ícones sobre uma imagem da barra de menus."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужна запись экрана. Dimble анимирует значки поверх снимка строки меню."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要录屏权限。Dimble 在菜单栏的画面上为图标制作动画。"
+          }
+        }
+      }
+    },
+    "Needs Screen Recording. Dimble draws the pill from a picture of the menu bar.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Braucht die Bildschirmaufnahme. Dimble zeichnet die Kapsel aus einem Bild der Menüleiste."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Necesita la grabación de pantalla. Dimble dibuja la cápsula a partir de una imagen de la barra de menús."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nécessite l’enregistrement de l’écran. Dimble dessine la capsule à partir d’une image de la barre des menus."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Richiede la registrazione schermo. Dimble disegna la capsula da un’immagine della barra dei menu."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画面収録が必要です。Dimble はメニューバーの画像からカプセルを描画します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "화면 기록이 필요합니다. Dimble은 메뉴 막대 이미지로 캡슐을 그립니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requer a gravação de tela. O Dimble desenha a cápsula a partir de uma imagem da barra de menus."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужна запись экрана. Dimble рисует капсулу по снимку строки меню."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要录屏权限。Dimble 会根据菜单栏的画面绘制胶囊。"
           }
         }
       }
@@ -14849,60 +15661,60 @@
         }
       }
     },
-    "Off. Turn it on for smoother show and hide animations.": {
+    "Off. Turn it on for smoother show and hide animations and for Live Activities.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aus. Schalte sie ein für weichere Ein- und Ausblendanimationen."
+            "value": "Aus. Schalte sie ein für weichere Ein- und Ausblendanimationen und für Live-Aktivitäten."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Desactivada. Actívala para animaciones más suaves al mostrar y ocultar."
+            "value": "Desactivada. Actívala para animaciones más suaves al mostrar y ocultar y para las Actividades en directo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Désactivé. Activez-le pour des animations d’affichage et de masquage plus fluides."
+            "value": "Désactivé. Activez-le pour des animations d’affichage et de masquage plus fluides et pour les Activités en direct."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Disattivata. Attivala per animazioni più fluide quando mostri e nascondi."
+            "value": "Disattivata. Attivala per animazioni più fluide quando mostri e nascondi e per le Attività in tempo reale."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "オフです。オンにすると、表示・非表示のアニメーションがより滑らかになります。"
+            "value": "オフです。オンにすると、表示・非表示のアニメーションがより滑らかになり、ライブアクティビティも表示できます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "꺼짐. 켜면 표시·숨김 애니메이션이 더 부드러워집니다."
+            "value": "꺼짐. 켜면 표시·숨김 애니메이션이 더 부드러워지고 실시간 현황도 표시됩니다."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Desativada. Ative para animações mais suaves ao mostrar e ocultar."
+            "value": "Desativada. Ative para animações mais suaves ao mostrar e ocultar e para as Atividades ao Vivo."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Выключено. Включите для более плавных анимаций показа и скрытия."
+            "value": "Выключено. Включите для более плавных анимаций показа и скрытия и для активностей Live."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已关闭。开启后，显示和隐藏动画更流畅。"
+            "value": "已关闭。开启后，显示和隐藏动画更流畅，也能显示实时活动。"
           }
         }
       }
@@ -15893,6 +16705,64 @@
         }
       }
     },
+    "Orange": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orange"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Naranja"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orange"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arancione"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オレンジ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "주황색"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Laranja"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оранжевый"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "橙色"
+          }
+        }
+      }
+    },
     "Out of the panel.": {
       "localizations": {
         "de": {
@@ -16473,6 +17343,122 @@
         }
       }
     },
+    "Pick a color from the screen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Farbe vom Bildschirm wählen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elegir un color de la pantalla"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prélever une couleur à l’écran"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli un colore dallo schermo"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画面から色を選択"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "화면에서 색상 선택"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escolher uma cor da tela"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать цвет с экрана"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从屏幕取色"
+          }
+        }
+      }
+    },
+    "Pink": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rosa"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rosa"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rose"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rosa"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ピンク"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "분홍색"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rosa"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Розовый"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "粉色"
+          }
+        }
+      }
+    },
     "Pinned by macOS": {
       "localizations": {
         "de": {
@@ -16933,6 +17919,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "上一曲"
+          }
+        }
+      }
+    },
+    "Purple": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Violett"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Morado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Violet"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Viola"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パープル"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보라색"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Roxo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фиолетовый"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "紫色"
           }
         }
       }
@@ -19257,6 +20301,64 @@
         }
       }
     },
+    "See when a Live Activity is running and bring it back in a click.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sieh, wann eine Live-Aktivität läuft, und hol sie mit einem Klick zurück."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mira cuándo hay una Actividad en directo en curso y recupérala con un clic."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voyez quand une Activité en direct est en cours et faites-la revenir d'un clic."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scopri quando è in corso un'Attività in tempo reale e riportala con un clic."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ライブアクティビティの実行中を知らせ、ワンクリックで表示。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실시간 현황이 진행 중일 때 알려 주고 한 번의 클릭으로 다시 표시합니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Veja quando uma Atividade ao Vivo está em andamento e traga-a de volta com um clique."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Узнавайте, когда идёт активность Live, и возвращайте её одним щелчком."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "实时活动进行时提示你，一键将其调回。"
+          }
+        }
+      }
+    },
     "See which Focus is on and switch it in a click.": {
       "localizations": {
         "de": {
@@ -20065,6 +21167,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "显示隐藏的项目"
+          }
+        }
+      }
+    },
+    "Show Live Activities": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live-Aktivitäten anzeigen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostrar Actividades en directo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afficher les Activités en direct"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostra Attività in tempo reale"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ライブアクティビティを表示"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실시간 현황 표시"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostrar Atividades ao Vivo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показывать активности Live"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示实时活动"
           }
         }
       }
@@ -20886,7 +22046,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Siri und Time Machine sind gesperrte macOS-Systemsymbole. Aktiviere unten Dimble’ Siri und Time Machine für einzelne Symbole, die du bewegen kannst."
+            "value": "Siri und Time Machine sind gesperrte macOS-Systemsymbole. Aktiviere unten Dimbles Siri und Time Machine für einzelne Symbole, die du bewegen kannst."
           }
         },
         "es": {
@@ -20944,7 +22104,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Siri ist ein gesperrtes macOS-Systemsymbol. Aktiviere unten Dimble’ Siri für ein Symbol, das du bewegen kannst."
+            "value": "Siri ist ein gesperrtes macOS-Systemsymbol. Aktiviere unten Dimbles Siri für ein Symbol, das du bewegen kannst."
           }
         },
         "es": {
@@ -22969,6 +24129,64 @@
         }
       }
     },
+    "Their pills show next to the «, and hidden system icons come back.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre Kapseln erscheinen neben dem «, ausgeblendete Systemsymbole ebenso."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sus cápsulas aparecen junto al «, y vuelven los iconos del sistema ocultos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leurs capsules s’affichent près du «, et les icônes système masquées aussi."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le capsule appaiono accanto al «, e tornano le icone di sistema nascoste."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "カプセルが « の横に表示され、隠したシステムアイコンも戻ります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "캡슐이 « 옆에 표시되고, 숨긴 시스템 아이콘이 돌아옵니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As cápsulas aparecem ao lado do «, e os ícones ocultos do sistema voltam."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Капсулы видны рядом с «, а скрытые системные значки возвращаются."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "胶囊显示在 « 旁边，隐藏的系统图标也会重新出现。"
+          }
+        }
+      }
+    },
     "Then turn the original off in %@'s settings.": {
       "localizations": {
         "de": {
@@ -23438,7 +24656,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Time Machine ist ein gesperrtes macOS-Systemsymbol. Aktiviere unten Dimble’ Time Machine für ein Symbol, das du bewegen kannst."
+            "value": "Time Machine ist ein gesperrtes macOS-Systemsymbol. Aktiviere unten Dimbles Time Machine für ein Symbol, das du bewegen kannst."
           }
         },
         "es": {
@@ -23893,6 +25111,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "关闭"
+          }
+        }
+      }
+    },
+    "Turn On Screen Recording": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirmaufnahme einschalten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activar la grabación de pantalla"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activer l’enregistrement de l’écran"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva la registrazione schermo"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画面収録をオンにする"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "화면 기록 켜기"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativar a gravação de tela"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить запись экрана"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开启录屏权限"
           }
         }
       }
@@ -24482,7 +25758,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dimble’ Siri verwenden"
+            "value": "Dimbles Siri verwenden"
           }
         },
         "es": {
@@ -24540,7 +25816,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dimble’ Siri und Time Machine verwenden"
+            "value": "Dimbles Siri und Time Machine verwenden"
           }
         },
         "es": {
@@ -24598,7 +25874,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dimble’ Time Machine verwenden"
+            "value": "Dimbles Time Machine verwenden"
           }
         },
         "es": {
@@ -25405,6 +26681,64 @@
         }
       }
     },
+    "When it drops or on a hotspot": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bei Verbindungsabbruch oder über Hotspot"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al perder la conexión o en un hotspot"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "À la déconnexion ou sur un hotspot"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quando la connessione cade o su hotspot"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続が切れたとき、またはホットスポット接続時"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결이 끊겼을 때 또는 핫스팟 사용 시"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quando a conexão cai ou em um hotspot"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При потере соединения или через точку доступа"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "断开连接或使用热点时"
+          }
+        }
+      }
+    },
     "When the pointer leaves the bar": {
       "localizations": {
         "de": {
@@ -25532,19 +26866,19 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mientras haya un modo de concentración activo"
+            "value": "Con Concentración activa"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Tant qu’un mode de concentration est actif"
+            "value": "Concentration activée"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Finché una Full immersion è attiva"
+            "value": "Con Full immersion attiva"
           }
         },
         "ja": {
@@ -25562,19 +26896,77 @@
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Enquanto um Foco estiver ativo"
+            "value": "Com um Foco ativo"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Пока включено фокусирование"
+            "value": "При фокусировании"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "专注模式开启期间"
+          }
+        }
+      }
+    },
+    "While a timer runs": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solange ein Timer läuft"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante un temporizador"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pendant un minuteur"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mentre un timer è attivo"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タイマー作動中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "타이머가 작동하는 동안"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enquanto um timer corre"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пока идёт таймер"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "计时器运行期间"
           }
         }
       }
@@ -25590,7 +26982,7 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Durante una copia de seguridad"
+            "value": "Durante una copia"
           }
         },
         "fr": {
@@ -25626,13 +27018,129 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Во время резервного копирования"
+            "value": "Во время копирования"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "备份期间"
+          }
+        }
+      }
+    },
+    "While charging": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beim Laden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mientras carga"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pendant la charge"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante la ricarica"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "充電中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "충전 중"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante o carregamento"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Во время зарядки"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "充电时"
+          }
+        }
+      }
+    },
+    "While charging or below %lld%%": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beim Laden oder unter %lld %%"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mientras carga o por debajo del %lld%%"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pendant la charge ou sous %lld %%"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante la ricarica o sotto il %lld%%"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "充電中または%lld%%未満"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "충전 중 또는 %lld%% 미만"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante o carregamento ou abaixo de %lld%%"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Во время зарядки или ниже %lld %%"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "充电时或低于 %lld%%"
           }
         }
       }
@@ -25865,6 +27373,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "宽松"
+          }
+        }
+      }
+    },
+    "Wide Chevron": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Breites Chevron"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chevrón ancho"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chevron large"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chevron largo"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "幅広シェブロン"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "넓은 쉐브론"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chevron largo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Широкий шеврон"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "宽尖角符号"
           }
         }
       }
@@ -26976,7 +28542,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS hat Dimble’ Bedienungshilfen-Berechtigung verworfen, was nach manchen Updates und Neuinstallationen passiert. Erteile sie erneut, und alles macht dort weiter, wo es aufgehört hat."
+            "value": "macOS hat Dimbles Bedienungshilfen-Berechtigung verworfen, was nach manchen Updates und Neuinstallationen passiert. Erteile sie erneut, und alles macht dort weiter, wo es aufgehört hat."
           }
         },
         "es": {

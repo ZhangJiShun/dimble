@@ -8,14 +8,106 @@ import PelmetEngine
 import ServiceManagement
 import SwiftUI
 
-/// The brand accent — pelmet purple; slightly lighter in dark mode for contrast.
-enum PelmetAccent {
-    static let nsColor = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 0.494, green: 0.373, blue: 0.949, alpha: 1)  // #7E5FF2
-            : NSColor(red: 0.408, green: 0.255, blue: 0.929, alpha: 1)  // #6841ED
+/// Accent choices for Settings › General: flat presets in hue order from the
+/// brand purple, the default, then the user's own color.
+/// Stored under its own defaults key (not in the settings blob), so a value
+/// this build doesn't know falls back to purple and an older build ignores it.
+enum AccentChoice: String, CaseIterable, Identifiable {
+    case purple, pink, orange, green, blue, indigo, custom
+    static let key = "pelmet.accent"
+    static let customKey = "pelmet.accent.custom"
+    static var current: AccentChoice {
+        UserDefaults.standard.string(forKey: key).flatMap(AccentChoice.init) ?? .purple
     }
-    static let accent = Color(nsColor: nsColor)
+
+    var id: String { rawValue }
+
+    var label: LocalizedStringKey {
+        switch self {
+        case .purple: "Purple"
+        case .pink: "Pink"
+        case .orange: "Orange"
+        case .green: "Green"
+        case .blue: "Blue"
+        case .indigo: "Indigo"
+        case .custom: "Choose your own"
+        }
+    }
+
+    /// (light, dark) as 0xRRGGBB. Light is deep enough to read on a light
+    /// window, dark is the softer shade. The user's own is theirs on both,
+    /// moved only where it would vanish.
+    var hex: (light: UInt32, dark: UInt32) {
+        switch self {
+        case .purple: (0x6841ED, 0x7E5FF2)
+        case .pink: (0xD1408E, 0xE993D1)
+        case .orange: (0xD4660A, 0xF6AB6B)
+        case .green: (0x1E9447, 0x7BD77F)
+        case .blue: (0x0A7AD1, 0x69C6FA)
+        case .indigo: (0x5061DC, 0x9CAFFE)
+        case .custom: AccentShade.shades(of: AccentStore.shared.customHex ?? AccentChoice.purple.hex.dark)
+        }
+    }
+
+    static func ns(_ hex: UInt32) -> NSColor {
+        NSColor(red: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
+                blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+    }
+
+    private static func dynamic(light: UInt32, dark: UInt32) -> NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? ns(dark) : ns(light)
+        }
+    }
+
+    var nsColor: NSColor {
+        let (light, dark) = hex
+        return Self.dynamic(light: light, dark: dark)
+    }
+
+    /// The label on a solid fill of this accent.
+    var onFill: NSColor {
+        let (light, dark) = hex
+        return Self.dynamic(light: AccentShade.label(on: light), dark: AccentShade.label(on: dark))
+    }
+
+    /// The dark-mode shade, for surfaces that are always dark (onboarding).
+    var darkColor: Color { Color(nsColor: Self.ns(hex.dark)) }
+}
+
+/// The chosen accent. Observable, so every SwiftUI view that reads
+/// `PelmetAccent` repaints when it changes — no relaunch.
+@Observable
+final class AccentStore {
+    static let shared = AccentStore()
+    var choice: AccentChoice {
+        didSet { UserDefaults.standard.set(choice.rawValue, forKey: AccentChoice.key) }
+    }
+    /// The color from "Choose your own", 0xRRGGBB. Kept while a preset is on,
+    /// so its swatch still shows it and one click brings it back.
+    var customHex: UInt32? {
+        didSet {
+            UserDefaults.standard.set(customHex.map { String(format: "%06X", $0) }, forKey: AccentChoice.customKey)
+        }
+    }
+    private init() {
+        let custom = UserDefaults.standard.string(forKey: AccentChoice.customKey).flatMap { UInt32($0, radix: 16) }
+        customHex = custom
+        choice = AccentChoice.current == .custom && custom == nil ? .purple : .current
+    }
+}
+
+/// The accent — pelmet purple unless the user picked another; slightly
+/// lighter in dark mode for contrast. Computed on every read from the
+/// observable store, so never cache it in a `let` or a layer color.
+enum PelmetAccent {
+    static var nsColor: NSColor { AccentStore.shared.choice.nsColor }
+    static var accent: Color { Color(nsColor: nsColor) }
+    /// The label on a solid accent fill: white, near-black on a shade too light for it.
+    static var onFill: Color { Color(nsColor: AccentStore.shared.choice.onFill) }
+    /// The dark-mode shade, for always-dark surfaces.
+    static var onDark: Color { AccentStore.shared.choice.darkColor }
 
     /// GitHub-star gold: bright on dark, amber on light so the label stays legible.
     static let star = Color(nsColor: NSColor(name: nil) { appearance in
@@ -698,6 +790,38 @@ struct SettingSwitch: View {
     }
 }
 
+/// Under a setting Screen Recording keeps off: why, and the fix. While it
+/// shows, the grant is read every second (the Permissions card's poll), so
+/// the setting comes back on its own once it's granted in System Settings.
+struct ScreenRecordingNeeded: View {
+    @Environment(AppState.self) private var appState
+    let reason: LocalizedStringKey
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(reason)
+                .foregroundStyle(.secondary)
+            Button("Turn On Screen Recording") { ScreenRecordingAccess.request() }
+                .buttonStyle(.plain)
+                .foregroundStyle(PelmetAccent.accent)
+        }
+        .font(.caption)
+        .task {
+            while !Task.isCancelled {
+                appState.refreshScreenRecording()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+}
+
+extension View {
+    /// The tooltip of a setting Screen Recording keeps off.
+    @ViewBuilder func screenRecordingHelp(_ text: LocalizedStringKey, when needed: Bool) -> some View {
+        if needed { help(text) } else { self }
+    }
+}
+
 struct SettingToggleRow: View {
     let title: LocalizedStringKey
     var caption: LocalizedStringKey? = nil
@@ -710,7 +834,7 @@ struct SettingToggleRow: View {
     }
 }
 
-/// Eight glyphs for the menu bar icon, drawn at bar size. Picking one repaints
+/// Nine glyphs for the menu bar icon, drawn at bar size. Picking one repaints
 /// the live status item through settingsChanged().
 struct StatusIconPicker: View {
     @Binding var selection: StatusIconStyle
@@ -719,7 +843,9 @@ struct StatusIconPicker: View {
         HStack(spacing: 2) {
             ForEach(StatusIconStyle.allCases) { style in
                 StatusIconTile(
-                    symbol: style.symbol(revealed: false),
+                    glyph: style == .wideChevron
+                        ? Image(nsImage: WideChevron.image(revealed: false)).renderingMode(.template)
+                        : Image(systemName: style.symbol(revealed: false)),
                     size: style.symbolPointSize ?? 13,
                     name: style.name,
                     selected: selection == style
@@ -739,6 +865,7 @@ extension StatusIconStyle {
     fileprivate var name: LocalizedStringKey {
         switch self {
         case .chevron: "Chevron"
+        case .wideChevron: "Wide Chevron"
         case .arrow: "Arrow"
         case .eye: "Eye"
         case .dots: "Dots"
@@ -751,7 +878,7 @@ extension StatusIconStyle {
 }
 
 private struct StatusIconTile: View {
-    let symbol: String
+    let glyph: Image
     let size: Double
     let name: LocalizedStringKey
     let selected: Bool
@@ -760,7 +887,7 @@ private struct StatusIconTile: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol)
+            glyph
                 .font(.system(size: size, weight: .medium))
                 .foregroundStyle(selected ? PelmetAccent.accent : .secondary)
                 .frame(width: 30, height: 24)
@@ -828,6 +955,10 @@ private struct GeneralPane: View {
                     StatusIconPicker(selection: binding(\.statusIconStyle))
                 }
             }
+            SettingRow(title: "Accent color") {
+                AccentSwatches()
+            }
+            .settingAnchor("accentColor")
             SettingToggleRow(
                 // Named, not spelled out: a sentence long enough to say the
                 // whole thing pushed the switch onto its own line in
@@ -955,7 +1086,7 @@ private struct GeneralPane: View {
             if !recording {
                 SettingRow(
                     title: "Screen Recording",
-                    caption: "Off. Turn it on for smoother show and hide animations."
+                    caption: "Off. Turn it on for smoother show and hide animations and for Live Activities."
                 ) {
                     Button("Grant access") { ScreenRecordingAccess.request() }
                         .buttonStyle(.bordered)
@@ -1029,8 +1160,17 @@ private struct BehaviorPane: View {
     ]
 
     var body: some View {
+        // Every style plays over pictures of the bar: without Screen
+        // Recording macOS's own slide shows whichever is picked.
+        let recording = appState.screenRecordingGranted
         SettingsCard(title: "Animation") {
             AnimationShowcase(selection: binding(\.revealAnimation))
+                .disabled(!recording)
+                .opacity(recording ? 1 : 0.5)
+                .screenRecordingHelp("Needs Screen Recording. Dimble animates the icons over a picture of the menu bar.", when: !recording)
+            if !recording {
+                ScreenRecordingNeeded(reason: "Each style needs Screen Recording. Without it, macOS slides the icons its own way.")
+            }
         }
         .settingAnchor("animation")
 
@@ -1520,7 +1660,11 @@ private struct AboutPane: View {
             HStack(spacing: 18) {
                 Link("Website", destination: URL(string: "https://dimble.fif7y.com")!)
                 Link("GitHub", destination: URL(string: "https://github.com/fif7y/dimble")!)
-                Link("Report an issue", destination: URL(string: "https://github.com/fif7y/dimble/issues")!)
+                Link("Report an issue", destination: IssueReport.formURL)
+                    .environment(\.openURL, OpenURLAction { url in
+                        IssueReport.open(url)
+                        return .handled
+                    })
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -1678,7 +1822,8 @@ struct StatusChip: View {
     }
 }
 
-/// The one true CTA treatment: solid brand accent, white label.
+/// The one true CTA treatment: solid brand accent, white label, or near-black
+/// on an accent too light for white.
 struct AccentChipButton: View {
     let text: LocalizedStringKey
     let symbol: String
@@ -1688,7 +1833,7 @@ struct AccentChipButton: View {
         Button(action: action) {
             Label(text, systemImage: symbol)
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(PelmetAccent.onFill)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
                 .background(PelmetAccent.accent, in: Capsule())
@@ -1922,4 +2067,51 @@ func hotkeyWarning(_ spec: HotkeySpec?, conflict: Bool) -> LocalizedStringKey? {
         return "macOS uses this shortcut. Turn it off in System Settings › Keyboard › Keyboard Shortcuts, or record another."
     }
     return nil
+}
+
+/// Settings › About › "Report an issue": the bug form with the versions and
+/// display setup already filled in (issue forms take a field's id as a query
+/// parameter), and dimble.log selected in Finder, ready to drag into it.
+enum IssueReport {
+    static var formURL: URL {
+        var c = URLComponents(string: "https://github.com/fif7y/dimble/issues/new")!
+        c.queryItems = [
+            URLQueryItem(name: "template", value: "bug_report.yml"),
+            URLQueryItem(name: "versions", value: versions),
+            URLQueryItem(name: "displays", value: displaySetup),
+        ]
+        return c.url ?? URL(string: "https://github.com/fif7y/dimble/issues")!
+    }
+
+    /// "0.3.4 (82) · macOS 27.2 (26C123)".
+    static var versions: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+            .replacingOccurrences(of: "Version ", with: "")
+            .replacingOccurrences(of: "Build ", with: "")
+        return "\(version) (\(build)) · macOS \(os)"
+    }
+
+    /// One of the template's dropdown options, word for word, or GitHub
+    /// leaves the field empty.
+    static var displaySetup: String {
+        let screens = NSScreen.screens
+        let builtIn = screens.filter { $0.directDisplayID.map { CGDisplayIsBuiltin($0) != 0 } ?? false }.count
+        if builtIn == screens.count { return "Built-in display only" }
+        if builtIn == 0 { return "External display(s)" }
+        return "Mixed, built-in plus external"
+    }
+
+    /// The form opens first, then Finder comes forward with the log
+    /// selected, so both are on screen for the drag.
+    static func open(_ url: URL) {
+        NSWorkspace.shared.open(url)
+        let log = PelmetLog.fileURL
+        guard FileManager.default.fileExists(atPath: log.path) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            NSWorkspace.shared.activateFileViewerSelecting([log])
+        }
+    }
 }

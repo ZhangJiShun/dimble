@@ -41,6 +41,8 @@ enum SettingsIndex {
                     ["hotkey", "shortcut", "keyboard shortcut", "toggle", "show hide", "key", "always hidden", "notification center"]),
             general("settingsHotkey", String(localized: "Open Settings"),
                     ["hotkey", "shortcut"]),
+            general("accentColor", String(localized: "Accent color"),
+                    ["color", "colour", "theme", "tint", "purple", "blue", "green", "orange", "pink", "indigo", "custom", "choose your own"]),
             general("rightClickMenu", String(localized: "Right-click menu"),
                     ["context menu", "empty spot", "bar menu"]),
             general("language", String(localized: "Display language"),
@@ -71,6 +73,8 @@ enum SettingsIndex {
 
             menuBar("systemExtras", String(localized: "System extras"),
                     ["now playing", "camera", "airdrop", "focus", "timer", "collateral"]),
+            menuBar("liveActivities", String(localized: "Show Live Activities"),
+                    ["live activity", "live mode", "pill", "dynamic island", "timer", "call", "screen recording"]),
 
             panel("hiddenIconsIn", String(localized: "Show hidden icons in"),
                   ["panel", "grid", "row", "notch", "overflow", "dropdown", "tray", "layout", "per display", "monitor", "external"]),

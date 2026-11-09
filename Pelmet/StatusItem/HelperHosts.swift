@@ -35,6 +35,7 @@ final class HelperHosts {
         var exitWatch: DispatchSourceProcess?
         var launching = false
         var relaunches = 0
+        var lastDeath: Date?
 
         var wantedItems: [HostedItem] { wanted.values.flatMap { $0 } }
         var wantsAnything: Bool { !wantedItems.isEmpty }
@@ -51,7 +52,10 @@ final class HelperHosts {
     init(appState: AppState) {
         self.appState = appState
         listener = MessagePortListener(name: PelmetBundle.mainLinkPort) { data in
-            guard let event = HelperWire.decode(HelperEvent.self, from: data) else { return }
+            guard let event = HelperWire.decode(HelperEvent.self, from: data), event.isValid else {
+                PelmetLog.log("helpers: dropped a \(data.count)-byte message that fails the message checks")
+                return
+            }
             Task { @MainActor in appState.helperHosts?.handle(event) }
         }
         if listener == nil {
@@ -92,7 +96,15 @@ final class HelperHosts {
             return
         }
         guard host.running != nil else { launch(section); return }
-        guard host.ready, let data = HelperWire.encode(HelperCommand.sync(host.wantedItems)) else { return }
+        guard host.ready else { return }
+        // The helper drops a sync that fails the message checks (#117) and
+        // keeps hosting what it had, so the miss is logged here: os.Logger
+        // lines from the helper never reach the log store on macOS 27.
+        let command = HelperCommand.sync(host.wantedItems)
+        guard command.isValid, let data = HelperWire.encode(command) else {
+            PelmetLog.log("helpers: \(host.appName) ← sync \(host.wantedItems.count) item(s) not sent, it fails the message checks")
+            return
+        }
         PelmetLog.log("helpers: \(host.appName) ← sync \(host.wantedItems.count) item(s)")
         if !MessagePortLink.send(data, to: host.bundleID) {
             // The helper only says ready once, at its own launch, so
@@ -189,6 +201,10 @@ final class HelperHosts {
         host.hosted = []
         hosts[section] = host
         guard host.wantsAnything else { return }
+        // Deaths far apart aren't a crash loop: a long session mustn't run
+        // out of relaunches and lose the section's items.
+        if let last = host.lastDeath, Date().timeIntervalSince(last) > 10 * 60 { host.relaunches = 0 }
+        host.lastDeath = Date()
         host.relaunches += 1
         hosts[section] = host
         guard host.relaunches <= 3 else {

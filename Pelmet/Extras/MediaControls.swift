@@ -89,10 +89,14 @@ final class ExtrasManager {
     /// Attached ahead of an uncovered swap (see `preattach`): the companion's
     /// show only fades them, and a pending layout drop must leave them be.
     private var preattached: Set<UUID> = []
+    /// Live mode has the assertion down under its covers (`holdForLive`).
+    private var heldForLive = false
     private var cameraMicMonitor: CameraMicMonitor?
     /// Pelmet's own countdown, alive while a timer item exists.
     private var pelmetTimer: PelmetTimer?
     private var lastTimerActive = false
+    /// The Clock app's timer, for the timer item to show while its own is idle.
+    private var clockTimerStatus: ClockTimerStatus?
     /// Time Machine's state, alive while a Time Machine item exists.
     private var timeMachine: TimeMachineBackup?
     private var lastBackupRunning = false
@@ -102,6 +106,14 @@ final class ExtrasManager {
     /// Whether a SharePlay session with no call is live, alive while a
     /// Camera & mic item exists.
     private var sharePlayStatus: SharePlayStatus?
+    /// The Live Activities running, alive while a Live Activities item exists
+    /// or live mode is on with Screen Recording granted (the "Show Live
+    /// Activities" setting): one watcher serves both.
+    private var liveActivityStatus: LiveActivityStatus?
+    private var lastLiveActivityActive = false
+    /// Live mode on without Screen Recording: the grant lands in System
+    /// Settings, where nothing tells Dimble, so it is read until it arrives.
+    private var grantWait: Task<Void, Never>?
     /// One clock per media item drawing the animated bars (see ExtraGlyphs).
     private var animators: [UUID: ExtraAnimator] = [:]
     /// Play/pause state the media glyph shows. Click intent drives it (players
@@ -173,10 +185,18 @@ final class ExtrasManager {
         switch spec.kind {
         case .cameraMicIndicator:
             return lastCameraIndicatorVisible
+        case .liveActivity:
+            return lastLiveActivityActive
         case .mediaControls:
             return spec.resolvedShowRule != .whenActive || (cameraMicMonitor?.mediaRelevant ?? true)
         case .appLauncher:
             return spec.resolvedShowRule != .whenActive || Self.isRunning(spec)
+        case .timer:
+            return spec.resolvedShowRule != .whenActive || (pelmetTimer?.isActive ?? false)
+        case .focus:
+            return !spec.isOnlyWhileActive || focusStatus?.active != nil
+        case .timeMachine:
+            return !spec.isOnlyWhileActive || (timeMachine?.status.running ?? false)
         default:
             return true
         }
@@ -218,8 +238,7 @@ final class ExtrasManager {
     }
 
     private func outOnItsRuleAlone(_ id: UUID, _ spec: ExtraItemSpec) -> Bool {
-        guard spec.kind.showsWhenItMatters, spec.resolvedShowRule == .whenActive,
-              !shownAlone.contains(id), let appState else { return false }
+        guard spec.comesOutWhileActive, !shownAlone.contains(id), let appState else { return false }
         let section = appState.settings.sectionModel.section(of: Self.itemID(for: spec))
         return section != .visible && !appState.revealedSectionsForExtras.contains(section)
     }
@@ -316,10 +335,16 @@ final class ExtrasManager {
                 let timer = PelmetTimer()
                 timer.onChange = { [weak self] in self?.timerChanged() }
                 pelmetTimer = timer
+                let clock = ClockTimerStatus()
+                clock.onChange = { [weak self] in self?.pelmetTimer?.clock = self?.clockTimerStatus?.current }
+                clockTimerStatus = clock
+                clock.start()
             }
         } else if let timer = pelmetTimer {
             timer.cancel()
             pelmetTimer = nil
+            clockTimerStatus?.stop()
+            clockTimerStatus = nil
         }
         if newSpecs.contains(where: { $0.kind == .timeMachine }) {
             if timeMachine == nil {
@@ -343,6 +368,7 @@ final class ExtrasManager {
             status.stop()
             focusStatus = nil
         }
+        syncLiveActivityWatcher()
         if newSpecs.contains(where: { $0.kind == .cameraMicIndicator }) {
             if sharePlayStatus == nil {
                 let status = SharePlayStatus()
@@ -386,6 +412,7 @@ final class ExtrasManager {
             // Shown on its own, the extra reads as if its section were out:
             // its own rule below (media playing, app running) still decides.
             var visible = section == .visible || revealed.contains(section) || shownAlone.contains(id)
+                || (heldForLive && section == .hidden && ridesSection(spec))
             switch spec.kind {
             case .cameraMicIndicator:
                 // Pure indicator, like Apple's: exists ONLY while hardware is
@@ -418,6 +445,28 @@ final class ExtrasManager {
                     appState?.cancelOwnItemPlacement(itemID)
                 }
                 lastCameraIndicatorVisible = visible
+            case .liveActivity:
+                // An indicator like Camera & mic: in the bar only while an
+                // activity runs, its section deciding where, not whether.
+                // On screen (Visible, or its section revealed) it is placed
+                // now, like the Timer: left to the next reveal, it sat at the
+                // agent's slot with Apply (1) up for 20 minutes (Gab,
+                // 2026-10-29). Concealed, the next reveal settle places it.
+                let active = !(liveActivityStatus?.active.isEmpty ?? true)
+                let sectionVisible = visible
+                visible = active
+                updateLiveActivityGlyph(item, spec: spec)
+                let itemID = Self.itemID(for: spec)
+                if active, !lastLiveActivityActive {
+                    if sectionVisible {
+                        appState?.placeOwnItemSoon(itemID)
+                    } else {
+                        appState?.placeOwnItemAtNextReveal(itemID)
+                    }
+                } else if !active, lastLiveActivityActive {
+                    appState?.cancelOwnItemPlacement(itemID)
+                }
+                lastLiveActivityActive = active
             case .mediaControls:
                 let audioActive = cameraMicMonitor?.audioOutputActive ?? false
                 if audioActive != lastAudioOutputActive {
@@ -473,9 +522,11 @@ final class ExtrasManager {
             case .timer:
                 // Section-governed while idle; a counting (or ringing) timer
                 // is an indicator and stays in the bar whatever its section.
+                // "While a timer runs": gone while idle, wherever it sits
+                // (a Clock or Siri timer brings it).
                 let active = pelmetTimer?.isActive ?? false
                 let sectionVisible = visible
-                visible = visible || active
+                visible = (spec.resolvedShowRule == .whenActive ? false : visible) || active
                 updateTimerGlyph(item, spec: spec)
                 let itemID = Self.itemID(for: spec)
                 if active, !lastTimerActive {
@@ -495,18 +546,20 @@ final class ExtrasManager {
                 updateTimeMachineGlyph(item, spec: spec)
                 let running = timeMachine?.status.running ?? false
                 // "When active": also out on the bar while a backup runs,
-                // from whatever section it sits in.
-                if spec.resolvedShowRule == .whenActive {
-                    visible = ruleVisibility(id, spec, active: running, sectionVisible: visible)
+                // from whatever section it sits in. "While backing up": gone
+                // while idle, like the Timer's "While a timer runs".
+                if spec.comesOutWhileActive {
+                    visible = ruleVisibility(id, spec, active: running, sectionVisible: spec.isOnlyWhileActive ? false : visible)
                 }
                 lastBackupRunning = running
             case .focus:
                 // The moon rides its section, idle it opens the Focus panel.
                 // "When active": also out on the bar while a Focus is on,
-                // from whatever section it sits in.
+                // from whatever section it sits in. "While a Focus is on":
+                // gone while idle, the way Apple's "When Active" is.
                 let active = focusStatus?.active != nil
-                if spec.resolvedShowRule == .whenActive {
-                    visible = ruleVisibility(id, spec, active: active, sectionVisible: visible)
+                if spec.comesOutWhileActive {
+                    visible = ruleVisibility(id, spec, active: active, sectionVisible: spec.isOnlyWhileActive ? false : visible)
                 }
                 updateFocusGlyph(item, spec: spec)
                 lastFocusActive = active
@@ -588,31 +641,52 @@ final class ExtrasManager {
     func preattach(model: SectionModel, revealing: Set<PelmetCore.Section>) -> [NSStatusItem] {
         var attached: [NSStatusItem] = []
         for (id, item) in items {
-            guard let spec = specs[id], lastVisible[id] != true else { continue }
-            switch spec.kind {
-            case .airdrop, .shortcut, .userSwitching, .shortcutsMenu, .siri, .quickNote: break
-            case .timer:
-                // Counting: already in the bar on its own.
-                guard !(pelmetTimer?.isActive ?? false) else { continue }
-            case .focus, .timeMachine:
-                // Each rides its section whatever its rule; one already out
-                // on its rule was skipped above.
-                break
-            case .mediaControls:
-                // Audio-driven unless it always shows.
-                guard spec.resolvedShowRule == .always else { continue }
-            case .appLauncher:
-                // The running edge has its own placement walk; only a plain
-                // launcher (or one already running) rides the section.
-                guard spec.resolvedShowRule != .whenActive || Self.isRunning(spec) else { continue }
-            case .cameraMicIndicator: continue  // hardware-driven
-            }
+            // One already out on its rule is in the bar.
+            guard let spec = specs[id], lastVisible[id] != true, ridesSection(spec) else { continue }
             guard revealing.contains(model.section(of: Self.itemID(for: spec))) else { continue }
             StatusItemFader.attach(item, shownLength: Self.shownLength(for: spec))
             preattached.insert(id)
             attached.append(item)
         }
         return attached
+    }
+
+    /// Comes and goes with its section alone, nothing it watches deciding:
+    /// what `preattach` attaches and live mode holds (`holdForLive`).
+    private func ridesSection(_ spec: ExtraItemSpec) -> Bool {
+        switch spec.kind {
+        case .airdrop, .shortcut, .userSwitching, .shortcutsMenu, .siri, .quickNote: return true
+        case .timer:
+            // Counting: already in the bar on its own. Idle under
+            // "While a timer runs": stays out.
+            return !(pelmetTimer?.isActive ?? false) && spec.resolvedShowRule == .always
+        case .focus, .timeMachine:
+            // Each rides its section under the card's rule. Idle under
+            // "only while active": stays out.
+            return !spec.isOnlyWhileActive
+        case .mediaControls:
+            // Audio-driven unless it always shows.
+            return spec.resolvedShowRule == .always
+        case .appLauncher:
+            // The running edge has its own placement walk; only a plain
+            // launcher (or one already running) rides the section.
+            return spec.resolvedShowRule != .whenActive || Self.isRunning(spec)
+        case .cameraMicIndicator, .liveActivity: return false  // driven by what runs
+        }
+    }
+
+    /// Live mode lets the assertion go under its covers (`LiveMirror`): the
+    /// Hidden icons come back beneath them, and the extras of Hidden join
+    /// them there, as if Hidden were out. A hover or the « then ends the
+    /// covers at the Always Hidden icons, the edge measured with the extras
+    /// in, and they show where they stand: nothing joins the layout, nothing
+    /// reflows (they stayed out, 2026-11-01). The assertion back, they leave
+    /// the way a conceal takes them, under the covers.
+    func holdForLive(_ held: Bool) {
+        guard held != heldForLive else { return }
+        heldForLive = held
+        PelmetLog.log("extras: \(held ? "Hidden's extras join the bar under live mode's covers" : "live mode's hold ends")")
+        applyCurrent()
     }
 
     /// Two-phase hide: width-collapse rides the same bar reflow as the
@@ -686,8 +760,9 @@ final class ExtrasManager {
     private func ruleForcesShow(_ spec: ExtraItemSpec) -> Bool {
         switch spec.kind {
         case .timer: return pelmetTimer?.isActive ?? false
-        case .focus: return spec.resolvedShowRule == .whenActive && focusStatus?.active != nil
-        case .timeMachine: return spec.resolvedShowRule == .whenActive && (timeMachine?.status.running ?? false)
+        case .focus: return spec.comesOutWhileActive && focusStatus?.active != nil
+        case .timeMachine: return spec.comesOutWhileActive && (timeMachine?.status.running ?? false)
+        case .liveActivity: return !(liveActivityStatus?.active.isEmpty ?? true)
         default: return false
         }
     }
@@ -736,9 +811,10 @@ final class ExtrasManager {
 
     // MARK: Item construction
 
-    /// Square for glyph-only items; the timer grows with its countdown.
+    /// Square for glyph-only items; the timer grows with its countdown, Live
+    /// Activities with their count.
     private static func shownLength(for spec: ExtraItemSpec) -> CGFloat {
-        spec.kind == .timer ? NSStatusItem.variableLength : NSStatusItem.squareLength
+        spec.kind == .timer || spec.kind == .liveActivity ? NSStatusItem.variableLength : NSStatusItem.squareLength
     }
 
     private func makeItem(for spec: ExtraItemSpec) -> NSStatusItem {
@@ -812,8 +888,13 @@ final class ExtrasManager {
         case .siri: "siri"
         case .focus: "moon.fill"
         case .quickNote: "note.text"
+        case .liveActivity: liveActivitySymbol
         }
     }
+
+    /// Live Activities whose app the Mac doesn't have (the iPhone's, which
+    /// is most of them) wear the platter Apple draws them in.
+    static let liveActivitySymbol = "platter.filled.top.iphone"
 
     // MARK: App launchers
 
@@ -1048,7 +1129,113 @@ final class ExtrasManager {
         case .timer: updateTimerGlyph(item, spec: spec)
         case .timeMachine: updateTimeMachineGlyph(item, spec: spec)
         case .focus: updateFocusGlyph(item, spec: spec)
+        case .liveActivity: updateLiveActivityGlyph(item, spec: spec)
         case .shortcut, .appLauncher, .userSwitching, .shortcutsMenu, .siri, .quickNote: break
+        }
+    }
+
+    /// The latest activity's app icon, in colour like a launcher's, when
+    /// the Mac has the app; the platter when it doesn't (an iPhone app) or
+    /// the log hasn't named it. More than one: how many, beside it.
+    private func updateLiveActivityGlyph(_ item: NSStatusItem, spec: ExtraItemSpec) {
+        guard let button = item.button else { return }
+        let active = liveActivityStatus?.active ?? []
+        let bundleID = active.last?.bundleID
+        setGlyph(item, id: spec.id, key: "liveActivity:\(bundleID ?? "")") {
+            bundleID.flatMap { Self.appIcon(for: ExtraItemSpec(kind: .liveActivity, bundleID: $0), size: 18) }
+                ?? NSImage(systemSymbolName: Self.liveActivitySymbol, accessibilityDescription: spec.itemTitle)
+        }
+        if active.count > 1 {
+            let size = NSFont.menuBarFont(ofSize: 0).pointSize
+            button.attributedTitle = NSAttributedString(
+                string: " \(active.count)",
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)]
+            )
+            button.imagePosition = .imageLeading
+        } else {
+            button.title = ""
+            button.imagePosition = .imageOnly
+        }
+    }
+
+    /// The watcher lives for the item, or for live mode alone while it can
+    /// start: a log stream and an eight-hour replay are not spent on a Mac
+    /// where Screen Recording keeps live mode from ever entering. The grant
+    /// arriving (`screenRecordingChanged`) starts it, and while live mode
+    /// waits on it the grant is re-read (`grantWait`), so one made with
+    /// Settings and onboarding closed lands too.
+    private func syncLiveActivityWatcher() {
+        syncGrantWait()
+        let hasItem = specs.values.contains { $0.kind == .liveActivity }
+        let liveMode = appState?.settings.showLiveActivities == true && ScreenRecordingAccess.isGranted
+        if hasItem || liveMode {
+            if liveActivityStatus == nil {
+                let status = LiveActivityStatus()
+                status.onChange = { [weak self] in self?.liveActivityChanged() }
+                liveActivityStatus = status
+                status.start()
+            }
+        } else if let status = liveActivityStatus {
+            status.stop()
+            liveActivityStatus = nil
+            // With the item off and live mode off or unable to start nothing
+            // says an activity ended, so live mode is told here (it forgets
+            // what it was told).
+            appState?.liveActivitiesChanged(running: false, count: 0)
+        }
+        // The item's edge tracking starts over when it goes, watcher or not.
+        if !hasItem { lastLiveActivityActive = false }
+    }
+
+    /// The grant flips `AppState.screenRecordingGranted`, whose
+    /// `screenRecordingChanged` comes back here and ends the wait.
+    private func syncGrantWait() {
+        let waits = appState?.settings.showLiveActivities == true && appState?.screenRecordingGranted == false
+        if waits, grantWait == nil {
+            PelmetLog.log("live activities: live mode waits for Screen Recording, re-reading the grant")
+            grantWait = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: AppTiming.screenRecordingPoll)
+                    self?.appState?.refreshScreenRecording()
+                }
+            }
+        } else if !waits, let wait = grantWait {
+            wait.cancel()
+            grantWait = nil
+        }
+    }
+
+    /// Screen Recording was granted or lost (`AppState.refreshScreenRecording`).
+    /// A play nothing answered opens no device, so no audio edge would ever
+    /// correct the glyph. A slow player's edge still turns it back on.
+    private func checkPlayWasAnswered(_ item: NSStatusItem, spec: ExtraItemSpec) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, self.items[spec.id] === item, self.mediaPlaying,
+                  !(self.cameraMicMonitor?.audioOutputActive ?? false) else { return }
+            self.mediaPlaying = false
+            self.updateMediaSymbol(item, spec: spec)
+        }
+    }
+
+    func screenRecordingChanged() {
+        syncLiveActivityWatcher()
+    }
+
+    /// The assertion was down and no pill came (`LiveActivityStatus.noPillFound`).
+    func liveActivityPillsMissing() {
+        liveActivityStatus?.noPillFound()
+    }
+
+    private func liveActivityChanged() {
+        appState?.liveActivitiesChanged(running: !(liveActivityStatus?.active.isEmpty ?? true), count: liveActivityStatus?.active.count ?? 0)
+        guard let spec = specs.values.first(where: { $0.kind == .liveActivity }),
+              let item = items[spec.id] else { return }
+        let active = !(liveActivityStatus?.active.isEmpty ?? true)
+        if active != lastLiveActivityActive {
+            applyCurrent()  // the visibility edge
+        } else {
+            updateLiveActivityGlyph(item, spec: spec)  // another app, another count
         }
     }
 
@@ -1078,7 +1265,7 @@ final class ExtrasManager {
     private func updateTimerGlyph(_ item: NSStatusItem, spec: ExtraItemSpec) {
         guard let button = item.button else { return }
         let text = pelmetTimer?.display
-        let done = pelmetTimer?.state == .done
+        let done = pelmetTimer?.shown == .done
         setGlyph(item, id: spec.id, key: "timer:\(done)") {
             NSImage(systemSymbolName: done ? "bell.fill" : "timer", accessibilityDescription: spec.itemTitle)
         }
@@ -1151,7 +1338,7 @@ final class ExtrasManager {
     private func timeMachineChanged() {
         let running = timeMachine?.status.running ?? false
         if running != lastBackupRunning,
-           specs.values.contains(where: { $0.kind == .timeMachine && $0.resolvedShowRule == .whenActive }) {
+           specs.values.contains(where: { $0.kind == .timeMachine && $0.comesOutWhileActive }) {
             applyCurrent()  // the visibility edge
             return
         }
@@ -1230,10 +1417,11 @@ final class ExtrasManager {
             return rightClick ? .onBar : .nothing
         case .cameraMicIndicator:
             return rightClick ? .nothing : .live
-        case .airdrop, .shortcut, .quickNote:
+        case .airdrop, .shortcut, .quickNote, .liveActivity:
             return .nothing
         case .timer:
-            return pelmetTimer?.state == .done && !rightClick ? .nothing : .onBar
+            guard let timer = pelmetTimer, !rightClick else { return .onBar }
+            return timer.state == .done || timer.showsClock ? .nothing : .onBar
         case .userSwitching, .shortcutsMenu, .timeMachine:
             return .onBar
         case .appLauncher:
@@ -1265,6 +1453,7 @@ final class ExtrasManager {
                 MediaKey.playPause.send()
                 mediaPlaying.toggle()
                 updateMediaSymbol(statusItem.value, spec: spec)
+                if mediaPlaying { checkPlayWasAnswered(statusItem.value, spec: spec) }
             }
         case .cameraMicIndicator:
             // Apple's own pill (video effects, mic mode, Stop Sharing), which
@@ -1285,13 +1474,20 @@ final class ExtrasManager {
             openAirDrop()
         case .quickNote:
             QuickNote.open()
+        case .liveActivity:
+            // The real pills, live and clickable: only the bar with no
+            // assertion held shows them (#106).
+            appState?.liftHideForLiveActivities()
         case .shortcut:
             if let name = spec.shortcutName {
                 runShortcut(named: name)
             }
         case .timer:
             guard let timer = pelmetTimer else { return }
-            if timer.state == .done, !rightClick {
+            if timer.showsClock, !rightClick {
+                // The Clock app pauses, cancels and dismisses its own timer.
+                NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/System/Applications/Clock.app"), configuration: .init())
+            } else if timer.state == .done, !rightClick {
                 timer.dismiss()
             } else {
                 popUp(timerMenu(timer), on: statusItem.value)

@@ -94,6 +94,9 @@ final class AppState {
     }
 
     @ObservationIgnored lazy var transitions = TransitionCoordinator(appState: self, engine: engine)
+    /// Live mode: the Live Activities pill mirrored beside the « while the
+    /// bar reads concealed (the "Show Live Activities" setting).
+    @ObservationIgnored lazy var liveMirror = LiveMirror(appState: self)
     @ObservationIgnored private lazy var barPresenter = BarPresenter(transitions: transitions)
     /// The hidden icons as tiles under the chevron (docs/PANEL-PLAN.md §5).
     @ObservationIgnored lazy var panelPresenter = PanelPresenter(appState: self)
@@ -242,6 +245,20 @@ final class AppState {
         ConcealGhostOverlay.onHeldBarClick = { [weak self] display, clicks in
             self?.heldBarClicked(display: display, clickCount: clicks)
         }
+        ConcealGhostOverlay.onHeldBarRightClick = { [weak self] point in
+            guard let self, settings.barRightClickMenuActive else { return }
+            PelmetLog.log("held: right click, the bar's menu at \(Int(point.x)),\(Int(point.y))")
+            PelmetStatusItem.contextMenu(appState: self).popUp(positioning: nil, at: point, in: nil)
+        }
+        ConcealGhostOverlay.iconFrames = { [weak self] in
+            guard let self else { return [] }
+            return (chevronWindowFrame.map { [$0] } ?? []) + (snapshot?.items.compactMap(\.frame) ?? [])
+        }
+        ConcealGhostOverlay.refreshIconFrames = { [weak self] in
+            // Never a walk mid-swap: the swap's own walks bring the snapshot.
+            guard let self, !isTransitioning else { return }
+            updateSnapshot(await engine.freshSnapshot())
+        }
         transitions.onRevealSettled = { [weak self] in
             guard let self else { return }
             dispatch(rehide.handle(.transitionSettled))
@@ -269,6 +286,7 @@ final class AppState {
             if case .concealed = rehide.state {
                 bandMonitor?.rearmHoverAfterConceal()
             }
+            liveMirror.kick()
         }
         // Settled as concealed: left `.revealed([])`, hover stayed dead.
         transitions.onNothingRevealed = { [weak self] in
@@ -445,7 +463,9 @@ final class AppState {
             settings.save()
         }
         extras = ExtrasManager(appState: self)
-        extras?.sync(with: settings.extraItems)
+        extras?.sync(with: settings.barExtraItems(screenRecording: screenRecordingGranted))
+        // Screen Recording granted while quit takes the Live Activities item away.
+        pruneOrderEditsForRemovedOwnItems()
     }
 
     private func startMonitors() {
@@ -1040,6 +1060,13 @@ final class AppState {
             // membership hides them where they sit (docs/CORE-SETS.md).
             let launchSnapshot = await engine.snapshot()
             registerNewItems(from: launchSnapshot)
+            // The panel's tile order, read off the bar while every section
+            // is on it (#104). Memory only, it was empty after a launch: the
+            // first open drew the model's order (concealed icons have no
+            // frame, so their ids decided it) and the picture pass re-sorted
+            // the tiles under the pointer. Phantoms behind the « are left
+            // out (`ApplyPass.primaryFrames`) and keep their stored slot.
+            recordDrawnOrder(launchSnapshot, revealed: [.hidden, .alwaysHidden])
             // Last look at the fully live bar: the first reveal's picture
             // (see TransitionCoordinator.takeBootPicture). The converge
             // below is what conceals.
@@ -1134,6 +1161,7 @@ final class AppState {
     // MARK: - Intents (UI + monitors call these)
 
     func toggle(reason: RevealReason, sections: Set<PelmetCore.Section> = [.hidden]) {
+        if liveMirror.intercepts(reveal: reason, sections: sections, how: .toggle) { return }
         // A chevron click on a display that shows all icons opens Always
         // Hidden there, in that display's "Show hidden icons in" (#96). A plain toggle
         // asked for nothing when anchored, and closed the icons that display
@@ -1189,6 +1217,7 @@ final class AppState {
     }
 
     func reveal(_ sections: Set<PelmetCore.Section>, reason: RevealReason) {
+        if liveMirror.intercepts(reveal: reason, sections: sections, how: .reveal) { return }
         if anchoredShowAllAsksNothing(sections, reason) { return }
         PerfTrace.markTrigger("\(reason)")
         // The panel is up and this needs the real bar (⌘↩ in Search, an
@@ -1206,6 +1235,7 @@ final class AppState {
     /// once it is all out. A reveal that left Always Hidden in widens to
     /// include it instead of closing: the key asked for more, not less.
     func toggleAll(reason: RevealReason) {
+        if liveMirror.intercepts(reveal: reason, sections: [.hidden, .alwaysHidden], how: .toggleAll) { return }
         let all: Set<PelmetCore.Section> = [.hidden, .alwaysHidden]
         // Off the anchor (no Screen Recording), a display that shows all
         // icons has its Hidden out as the policy's own bar reveal (#96). A
@@ -1476,6 +1506,7 @@ final class AppState {
     func showExtrasAlone(_ keys: Set<ItemID>) { extras?.showAlone(keys) }
     func releaseExtrasAlone(_ keys: Set<ItemID>) { extras?.releaseAlone(keys) }
     func forgetExtrasAlone(_ keys: Set<ItemID>) { extras?.forgetAlone(keys) }
+    func holdExtrasForLive(_ held: Bool) { extras?.holdForLive(held) }
 
     /// False for one of Pelmet's own extras its section would not bring out
     /// (media controls with nothing playing); true for anything else.
@@ -1668,6 +1699,7 @@ final class AppState {
 
     /// Revealed OR heading there — what the chevron should show.
     private var isRevealedOrRevealing: Bool {
+        if liveMirror.hiddenIsOut { return true }
         // Icons out on their own leave the chevron collapsed: no section is.
         switch rehide.state {
         case .revealed(let sections, _): return !sections.isEmpty
@@ -1676,6 +1708,9 @@ final class AppState {
         default: return false
         }
     }
+
+    /// Live mode put Hidden out or back under its covers, with no reveal.
+    func chevronFaceChanged() { statusItem?.updateSymbol(revealed: isRevealedOrRevealing) }
 
     /// Bounded poll until the engine reports swap-quiet for `interval` — the
     /// agent animates each swap, so quiet means the bar has stopped moving.
@@ -1705,8 +1740,12 @@ final class AppState {
         interval: TimeInterval, deadline: TimeInterval, poll: Duration
     ) async {
         let by = Date().addingTimeInterval(deadline)
-        while Date() < by, await !engine.quiesced(for: interval) {
-            try? await Task.sleep(for: poll)
+        while !Task.isCancelled, Date() < by, await !engine.quiesced(for: interval) {
+            do {
+                try await Task.sleep(for: poll)
+            } catch {
+                return
+            }
         }
     }
 
@@ -1748,13 +1787,17 @@ final class AppState {
         guard granted != screenRecordingGranted else { return }
         screenRecordingGranted = granted
         PelmetLog.log("screen: recording granted=\(granted)")
+        // The Live Activities item goes or comes with the grant.
+        if settings.extraItems.contains(where: { $0.kind == .liveActivity }) { settingsChanged() }
+        extras?.screenRecordingChanged()
         if launchBaselineApplied { reconcileAnchor("screen recording \(granted ? "granted" : "lost")") }
     }
 
-    /// Grant arrived: the engine's walks were empty until now, and the clock
-    /// relay's tap never came up — re-read the bar, retry the tap, and
-    /// re-apply the model. Grant lost: nothing to tear down (walks just go
-    /// empty), but the status item and settings show the warning.
+    /// Grant arrived: the engine's walks were empty until now, the clock
+    /// relay's tap never came up, and the band's pointer tap was blind to
+    /// other apps — re-read the bar, retry both taps, and re-apply the
+    /// model. Grant lost: nothing to tear down (walks just go empty), but
+    /// the status item and settings show the warning.
     private func accessibilityChanged(_ granted: Bool) {
         accessibilityGranted = granted
         PelmetLog.log("ax: trusted=\(granted)")
@@ -1765,6 +1808,7 @@ final class AppState {
         bandMonitor?.reviveTapIfDead()
         panelPresenter.reviveTypingTapIfDead()
         clockRelay?.setEnabled(settings.clockClickOpensNotificationCenter)
+        bandMonitor?.accessibilityGranted()
         Task {
             guard engineStarted else { return }
             updateSnapshot(await engine.snapshot())
@@ -2059,6 +2103,99 @@ final class AppState {
         }
     }
 
+    /// The Live Activities item was clicked (#106): the bar comes out with
+    /// the assertion let go, the only bar MenuBarAgent shows the pills on,
+    /// live and clickable, and goes back the way any reveal does (the
+    /// pointer leaves, the delay runs out, a click elsewhere). A blink like
+    /// the camera relay's can't do it: the pill is the thing to see, not a
+    /// panel that outlives the re-acquire. Every section comes out, Always
+    /// Hidden too: with any assertion held the pills stay gone, so nothing
+    /// can stay hidden while they show. Through the bar's own reveal, so it
+    /// moves the way a ⌥-click does. A click while it is up, or on its way,
+    /// puts it back at once: the lift's state is read here, not asked of the
+    /// engine, which is mid-converge for the whole reveal.
+    func liftHideForLiveActivities() {
+        if liveMirror.interceptsItemClick() { return }
+        let all: Set<PelmetCore.Section> = [.hidden, .alwaysHidden]
+        if transitions.liftUp {
+            PelmetLog.log("liveactivity: click with the bar lifted — concealing")
+            concealNow()
+            return
+        }
+        guard !liftStarting else {
+            PelmetLog.log("liveactivity: click while the lift starts — left to it")
+            return
+        }
+        liftStarting = true
+        Task { @MainActor in
+            defer { liftStarting = false }
+            // Before anything moves: the picture the re-hide will show.
+            await transitions.keepLiftPicture()
+            if isRevealed, !panelShowsReveal, currentRevealedSections.isSuperset(of: all) {
+                // Out already: no reveal is coming to carry the lift.
+                PelmetLog.log("liveactivity: lift — the bar is out, the assertion goes")
+                await transitions.liftOutBar()
+                checkLiftBroughtPills()
+                return
+            }
+            PelmetLog.log("liveactivity: lift — everything out with the assertion down")
+            reveal(all, reason: .itemInBar)
+            // After the request: the reveal's task, which runs later, takes it.
+            transitions.liftRequestedAt = Date()
+            checkLiftBroughtPills()
+        }
+    }
+
+    /// With the assertion down the pills come back, given the time live mode
+    /// gives them or until the re-hide. A lift that brings none back was for
+    /// an activity that's over. `liftUp` also covers a request no reveal took,
+    /// where the assertion never went, so the wait starts at `lifted`.
+    private func checkLiftBroughtPills() {
+        Task { @MainActor [weak self] in
+            var liftedAt: Date?
+            while liftedAt.map({ Date().timeIntervalSince($0) < LiveMirror.noPillGrace }) ?? true {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, self.transitions.liftUp else { break }
+                guard self.transitions.lifted else { continue }
+                if liftedAt == nil { liftedAt = Date() }
+                let found = await Task.detached(priority: .userInitiated) { !PillProbe.copies().isEmpty }.value
+                if found {
+                    PelmetLog.log("liveactivity: the lift brought a pill back")
+                    return
+                }
+            }
+            guard let liftedAt, Date().timeIntervalSince(liftedAt) >= AppTiming.liftPillWait else { return }
+            PelmetLog.log("liveactivity: the lift brought no pill back")
+            self?.liveActivityPillsMissing()
+        }
+    }
+
+    /// The assertion was down and no pill came: what only came from before
+    /// this launch isn't running. A locked screen has no bar to read, and
+    /// the probe that looked needs Accessibility.
+    func liveActivityPillsMissing() {
+        guard !Self.sessionAway, AccessibilityAccess.isGranted else { return }
+        extras?.liveActivityPillsMissing()
+    }
+    /// From the lift's click until its reveal is asked for (the picture
+    /// it keeps first).
+    private var liftStarting = false
+
+    /// The Live Activities watcher saw an activity start or end: `LiveMirror`
+    /// enters or leaves when the bar allows, if the setting is on.
+    func liveActivitiesChanged(running: Bool, count: Int = 0) {
+        liveMirror.activitiesChanged(running: running, count: count)
+    }
+
+    /// A lift's re-hide has come to rest (`TransitionCoordinator.endLift`):
+    /// the reads it held look at the bar again, and Camera & mic, kept on
+    /// the bar beside Apple's pill, goes back to its own rule.
+    func liftSettled() {
+        overflowHoldEnded()
+        guard !isTransitioning else { return }
+        extras?.apply(model: settings.sectionModel, revealed: currentRevealedSections, systemCameraPillVisible: systemCameraPillVisible)
+    }
+
     /// Set while the Camera & mic relay has the assertion down: Apple's
     /// pill is back on the bar for that moment, and Pelmet's item must not
     /// step aside for it (a reflow under the cover, and again after).
@@ -2266,8 +2403,11 @@ final class AppState {
         // when not): through the Apply door like any own item entering the
         // bar, one hidden-cursor drag while the user is still at the toggle.
         let previousOwnIDs = Set((extras?.managedItemIDs ?? []) + (separators?.managedItemIDs ?? []))
+        // Before the extras sync: a setting turned off leaves live mode for
+        // its own reason, ahead of the watcher stopping under it.
+        liveMirror.settingChanged()
         separators?.sync(with: settings.separators)
-        extras?.sync(with: settings.extraItems)
+        extras?.sync(with: settings.barExtraItems(screenRecording: screenRecordingGranted))
         pruneOrderEditsForRemovedOwnItems()
         let ownIDs = Set((extras?.managedItemIDs ?? []) + (separators?.managedItemIDs ?? []))
         // Separators are drawings: they move at Apply, never on their own.
@@ -2819,14 +2959,14 @@ final class AppState {
     /// One own item through the Apply door (`ApplyPass.Scope.
     /// ownItem`). Never overlaps a running pass; a whole-bar pass covers it.
     private func placeOwnItemNow(_ id: ItemID) async {
-        guard !applying else { return }
+        guard !applying else { return placeOwnItemAfterPassInFlight(id) }
         // Boot: measure only once the bar has finished attaching
         // (`barAttachesAt`); before the adoption, a full lead from now.
         let due = barAttachesAt ?? ContinuousClock.now + AppTiming.bootOwnItemLead
         if ContinuousClock.now < due {
             PelmetLog.log("apply: own \(id.rawValue) waits for the boot lead")
             try? await Task.sleep(until: due, clock: .continuous)
-            guard !applying else { return }
+            guard !applying else { return placeOwnItemAfterPassInFlight(id) }
         }
         // Checked before the layout test: a concealed section ghosts its
         // extra at once, which is not the flap below (Siri toggle, 2026-09-21).
@@ -2881,6 +3021,15 @@ final class AppState {
             ownItemsRetried.remove(id)
             ownItemMisses.removeValue(forKey: id)
         }
+    }
+
+    /// Another pass holds the door (two own items' retries due together, a
+    /// user's Apply). Dropped, the Live Activities item kept the agent's
+    /// slot behind Media's retry and Apply (1) stayed (Gab, 2026-10-29):
+    /// it goes again once that pass is done.
+    private func placeOwnItemAfterPassInFlight(_ id: ItemID) {
+        PelmetLog.log("apply: own \(id.rawValue) waits for the pass in flight")
+        placeOwnItemSoon(id, after: AppTiming.ownItemRetryDelay)
     }
 
     /// Pelmet's chevron item in a snapshot — the visible/hidden boundary marker
@@ -3261,15 +3410,22 @@ final class AppState {
 
     /// Pelmet has the bar: a pass (Apply, the quiet Apply under the panel, a
     /// picture pass) or a relay (an item menu, the clock, Camera & mic) has
-    /// icons out or the « open, so a walk reads a bar nobody sees.
+    /// icons out or the « open, so a walk reads a bar nobody sees; or a Live
+    /// Activities lift has let the system's extras and pills in.
     private var overflowReadHold: String? {
         if applying { return "an Apply pass has the bar" }
         if transitions.quietApplyInFlight { return "a quiet Apply has the bar" }
         if transitions.passInFlight { return "a picture pass has the bar" }
         if clockBlinkInFlight || audioVideoRelayActive { return "clock or Camera & mic relay in flight" }
         if press.isRunning { return "item menu relay in flight" }
+        if let lift = liftHoldReason { return lift }
         return nil
     }
+
+    /// A Live Activities lift has the bar, or its re-hide is settling (#106):
+    /// the extras and pills it lets back are in the bar's order and push
+    /// icons behind the «. The order keeper waits on it by name.
+    var liftHoldReason: String? { transitions.liftHoldReason }
 
     private var barMovingReason: String? {
         overflowReadHold ?? (isTransitioning ? "reveal or conceal in progress" : nil)
@@ -3342,7 +3498,7 @@ final class AppState {
 
     /// The session is locked or switched to another user: drags would go to
     /// the login window.
-    private static var sessionAway: Bool {
+    static var sessionAway: Bool {
         guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
         return (session["CGSSessionScreenIsLocked"] as? Bool) == true
             || (session[kCGSessionOnConsoleKey as String] as? Bool) == false
@@ -3585,7 +3741,7 @@ final class AppState {
             section: section,
             snapshotItems: snapshot?.items ?? [],
             concealed: snapshot?.concealed ?? [],
-            extraItems: settings.extraItems,
+            extraItems: settings.barExtraItems(screenRecording: screenRecordingGranted),
             separators: settings.separators,
             model: settings.sectionModel,
             pelmetBundleID: PelmetBundle.mainID,
@@ -3626,7 +3782,7 @@ final class AppState {
     /// assertion held (a full reveal); Pelmet's indicator defers to it to
     /// avoid duplication. Not while the relay has it up for a click.
     var systemCameraPillVisible: Bool {
-        guard !audioVideoRelayActive else { return false }
+        guard !audioVideoRelayActive, !transitions.liftKeepsCameraItem else { return false }
         return (snapshot?.items ?? []).contains {
             $0.id.rawValue.contains("menuextra.audiovideo") && $0.frame != nil
         }
@@ -3638,7 +3794,7 @@ final class AppState {
     /// Apple's SharePlay icon is on screen (a full reveal lets it back):
     /// the Camera & mic item steps aside for it as it does for the pill.
     var systemSharePlayVisible: Bool {
-        guard !audioVideoRelayActive else { return false }
+        guard !audioVideoRelayActive, !transitions.liftKeepsCameraItem else { return false }
         return (snapshot?.items ?? []).contains {
             $0.id.rawValue.hasSuffix(AudioVideoPill.sharePlayIdentifier) && $0.frame != nil
         }
@@ -4090,6 +4246,18 @@ final class AppState {
         return carried.union(drawnHidden)
     }
     private var collateralTracker = CollateralTracker()
+    /// What decides a destroyed verdict once a report comes in (#115): where
+    /// the app runs from (#30's kill keys on that) and whether its own extras
+    /// bar still lists the icon (none: the app took it off itself, or the
+    /// agent parked it).
+    private func collateralEvidence(_ key: ItemID) -> String {
+        guard let bundle = key.bundleID,
+              let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first
+        else { return "not running" }
+        let lists = ItemEnumerator.listsStatusItem(pid: app.processIdentifier).map { $0 ? "lists its icon" : "lists none" }
+        let path = app.bundleURL.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "?"
+        return "pid \(app.processIdentifier) at \(path), its extras bar \(lists ?? "unreadable")"
+    }
     /// Canonical keys of icons the bar destroyed although the allowlist
     /// protects them (#30) — same badge, and the editor keeps their tile
     /// instead of losing them to every section at once. See CollateralTracker.
@@ -4147,10 +4315,19 @@ final class AppState {
         UserDefaults.standard.set(Array(immovableBundles), forKey: Self.immovableKey)
         PelmetLog.log("editor: immovable \(immovableBundles.sorted())")
     }
-    /// Consecutive snapshots a host must read the same (dis)agreeing way
-    /// before the sticky mark flips.
-    private static let bundlelessConfirmations = 3
+    /// Per bundle, the snapshots in a row whose host read against its sticky
+    /// mark (`BundlelessMark`).
     private var bundlelessStreak: [String: Int] = [:]
+
+    /// When `pid` started, from the kernel; nil for an unknown pid.
+    /// `BundlelessMark` tells a relaunch from a settled host by it (#103).
+    nonisolated private static func processStart(_ pid: pid_t) -> Date? {
+        guard pid > 0 else { return nil }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(info.pbi_start_tvsec) + TimeInterval(info.pbi_start_tvusec) / 1_000_000)
+    }
 
     func isBundlelessHost(_ id: ItemID) -> Bool {
         id.bundleID.map { bundlelessHosts.contains($0) } ?? false
@@ -4813,23 +4990,33 @@ final class AppState {
         // normal app as bundle-less (Sconce and a Pelmet launcher, both
         // 2026-09-14; the read cleared 75ms later). A real bundle-less host
         // (ChatGPT Classic's helper) reads that way on every walk. So: mark
-        // after `bundlelessConfirmations` consecutive live sightings, and
-        // unmark a host that reads fine that many times in a row — the
-        // "fix the app" recovery happens on its own. Never Pelmet's bundles.
+        // after `BundlelessMark.confirmations` consecutive live sightings,
+        // and unmark a host that reads fine that many times in a row — the
+        // "fix the app" recovery happens on its own. Once concealed, though,
+        // a bundle-less host's icon is never live again: a launch reads it
+        // once, before the first swap, and the mark never landed (#103). A
+        // host that has run for a while is no relaunch, so that one sighting
+        // marks it (`BundlelessMark.settledHostAge`). Never Pelmet's bundles.
         var readings: [String: Bool] = [:]
+        var hostAges: [String: TimeInterval] = [:]
         for item in snap.items where item.frame != nil {
             guard let bundle = item.id.bundleID, !PelmetBundle.ownIDs.contains(bundle) else { continue }
             readings[bundle] = (readings[bundle] ?? false) || item.hostIsBundleless
+            if item.hostIsBundleless, !bundlelessHosts.contains(bundle), let started = Self.processStart(item.pid) {
+                hostAges[bundle] = max(hostAges[bundle] ?? 0, -started.timeIntervalSinceNow)
+            }
         }
         var changed = false
         for (bundle, bundleless) in readings {
-            let marked = bundlelessHosts.contains(bundle)
-            guard bundleless != marked else { bundlelessStreak.removeValue(forKey: bundle); continue }
-            let streak = (bundlelessStreak[bundle] ?? 0) + 1
-            bundlelessStreak[bundle] = streak
-            guard streak >= Self.bundlelessConfirmations else { continue }
-            bundlelessStreak.removeValue(forKey: bundle)
+            let before = bundlelessStreak[bundle] ?? 0
+            let step = BundlelessMark.step(
+                marked: bundlelessHosts.contains(bundle), bundleless: bundleless, streak: before, hostAge: hostAges[bundle])
+            bundlelessStreak[bundle] = step.streak > 0 ? step.streak : nil
+            guard step.flips else { continue }
             if bundleless { bundlelessHosts.insert(bundle) } else { bundlelessHosts.remove(bundle) }
+            if bundleless, before + 1 < BundlelessMark.confirmations, let age = hostAges[bundle] {
+                PelmetLog.log("editor: \(bundle) marked on one sighting, its bundle-less host has run \(Int(age))s")
+            }
             changed = true
         }
         if changed {
@@ -4858,8 +5045,10 @@ final class AppState {
             running: { NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty == false }
         )
         if collateralTracker.confirmed != destroyedKeys {
+            let added = collateralTracker.confirmed.subtracting(destroyedKeys)
             destroyedKeys = collateralTracker.confirmed
             PelmetLog.log("snapshot: destroyed by the bar \(destroyedKeys.map(\.rawValue))")
+            for key in added { PelmetLog.log("snapshot: \(key.rawValue) destroyed — \(collateralEvidence(key))") }
         }
         snapshot = snap
         grouper.noteChange()
@@ -5181,9 +5370,16 @@ final class AppState {
                 // mid-transition superseded the transition's own converge
                 // for nothing; a known bundle rejoining the allowlist is
                 // picked up by the next converge, a new one is routed now.
-                if !isTransitioning || !registered.isEmpty {
+                // Nor during a blink (the clock, Camera & mic): its drop
+                // reflows the bar and lands here, and converging took the
+                // assertion back before the press, which macOS refused; the
+                // panel came 1.7s late and the next click closed it (#103).
+                // The blink re-acquires on its own once its click is in.
+                if (!isTransitioning && !clockBlinkInFlight) || !registered.isEmpty {
                     guard engineStarted else { return }
                     await engine.setModel(settings.sectionModel)
+                } else if clockBlinkInFlight {
+                    PelmetLog.log("items changed: no converge — a blink has the assertion down for its click")
                 }
                 updateSnapshot(await engine.snapshot())
                 // The system camera pill appearing/vanishing is an

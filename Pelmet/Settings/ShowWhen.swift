@@ -10,16 +10,22 @@ import SwiftUI
 
 /// What an icon waits for before it comes back.
 enum ShowWhenCondition: Hashable {
-    case onBattery, below20
-    case wifiDrops
+    case battery(BatteryShowCondition)
+    case wifiDrops, wifiDropsOrHotspot
     case focusOn
     case backingUp
 
     var label: LocalizedStringKey {
         switch self {
-        case .onBattery: "On battery power"
-        case .below20: "Below \(BatteryShowCondition.lowCharge)%"
+        case .battery(let condition):
+            switch condition {
+            case .onBattery: "On battery power"
+            case .below20, .below30, .below40: "Below \(condition.lowCharge)%"
+            case .charging: "While charging"
+            case .chargingOrBelow20: "While charging or below \(condition.lowCharge)%"
+            }
         case .wifiDrops: "When it drops"
+        case .wifiDropsOrHotspot: "When it drops or on a hotspot"
         case .focusOn: "While a Focus is on"
         case .backingUp: "While backing up"
         }
@@ -66,6 +72,14 @@ enum ShowWhenSubject: CaseIterable, Hashable {
         }
     }
 
+    /// Whether the card and the editor tile offer this rule: Battery and
+    /// Wi-Fi always, a Pelmet item while it is on, unless its row shows it
+    /// only while active (it comes out on its own already).
+    func offersRule(_ items: [ExtraItemSpec]) -> Bool {
+        guard let kind else { return true }
+        return items.contains { $0.kind == kind && !$0.isOnlyWhileActive }
+    }
+
     /// The glyph search and the extras draw for the same icon.
     var symbol: String {
         switch self {
@@ -97,8 +111,8 @@ enum ShowWhenSubject: CaseIterable, Hashable {
 
     var conditions: [ShowWhenCondition] {
         switch self {
-        case .battery: [.onBattery, .below20]
-        case .wifi: [.wifiDrops]
+        case .battery: BatteryShowCondition.allCases.map(ShowWhenCondition.battery)
+        case .wifi: [.wifiDrops, .wifiDropsOrHotspot]
         case .focus: [.focusOn]
         case .timeMachine: [.backingUp]
         }
@@ -126,11 +140,12 @@ struct ShowWhenRule {
     }
 
     /// The condition in force when it is on, kept while it is off. Only
-    /// Battery has a choice of them.
+    /// Battery and Wi-Fi have a choice of them.
     var condition: ShowWhenCondition {
         switch subject {
-        case .battery: appState.settings.showRules.batteryCondition == .below20 ? .below20 : .onBattery
-        case .wifi, .focus, .timeMachine: subject.conditions[0]
+        case .battery: .battery(appState.settings.showRules.batteryCondition)
+        case .wifi: appState.settings.showRules.wifiHotspot ? .wifiDropsOrHotspot : .wifiDrops
+        case .focus, .timeMachine: subject.conditions[0]
         }
     }
 
@@ -182,9 +197,10 @@ struct ShowWhenRule {
         switch subject {
         case .battery:
             if let on { appState.settings.showRules.batteryOn = on }
-            if let condition { appState.settings.showRules.batteryCondition = condition == .below20 ? .below20 : .onBattery }
+            if case .battery(let condition)? = condition { appState.settings.showRules.batteryCondition = condition }
         case .wifi:
             if let on { appState.settings.showRules.wifiOn = on }
+            if let condition { appState.settings.showRules.wifiHotspot = condition == .wifiDropsOrHotspot }
         case .focus, .timeMachine:
             guard let on, let index = specIndex else { return }
             appState.settings.extraItems[index].showRule = on ? .whenActive : .always
@@ -200,11 +216,8 @@ struct ShowWhenRule {
 struct ShowWhenCard: View {
     @Environment(AppState.self) private var appState
 
-    /// Battery and Wi-Fi always; a Pelmet item only while it is on.
     private var subjects: [ShowWhenSubject] {
-        ShowWhenSubject.allCases.filter { subject in
-            subject.kind.map { kind in appState.settings.extraItems.contains { $0.kind == kind } } ?? true
-        }
+        ShowWhenSubject.allCases.filter { $0.offersRule(appState.settings.extraItems) }
     }
 
     var body: some View {

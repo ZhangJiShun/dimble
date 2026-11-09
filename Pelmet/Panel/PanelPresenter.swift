@@ -144,6 +144,8 @@ final class PanelPresenter: RevealPresenter {
     private var glassTimer: Timer?
     /// Where `place` last put the window, before any motion.
     private var placed: NSRect?
+    /// The open `placed` belongs to (`generation`).
+    private var placedGeneration = -1
     private var passTask: Task<Void, Never>?
     /// Keys a pass looked for and could not picture (an item that draws
     /// nothing, one the notch hides): not asked for again until a picture
@@ -290,7 +292,13 @@ final class PanelPresenter: RevealPresenter {
         // On screen from the next pass of the run loop: the `perf` line's
         // open → first frame.
         DispatchQueue.main.async { trace.finish("shown") }
-        PelmetLog.log("panel: \(wasOpen ? "widened" : "open") (\(reason.map { "\($0)" } ?? "no reason")) — \(shown.tiles) tile(s), \(shown.missing.count) without a fresh picture, key=\(window?.isKeyWindow == true)")
+        // A kept picture (one from the last launch, #104) draws while the
+        // pass retakes it; a tile with none draws its app's icon.
+        let bare = lastContent?.art.filter { entry in
+            if case .item = entry.key, case .icon = entry.value.image { return true }
+            return false
+        }.count ?? 0
+        PelmetLog.log("panel: \(wasOpen ? "widened" : "open") (\(reason.map { "\($0)" } ?? "no reason")) — \(shown.tiles) tile(s), \(shown.missing.count) without a fresh picture (\(bare) with none), key=\(window?.isKeyWindow == true)")
         // Settled on the next turn, as the bar's reveal settles after its
         // effect returns: the machine is still in this dispatch.
         DispatchQueue.main.async { [weak self] in self?.appState?.panelDidSettle() }
@@ -795,6 +803,12 @@ final class PanelPresenter: RevealPresenter {
             y: (top - size.height).rounded(),
             width: width.rounded() + window.leadingMargin, height: size.height.rounded())
         if frame.size != placed?.size { resizedAt = CACurrentMediaTime() }
+        // The oracle for a panel that moves under the pointer (#104): a
+        // resize within one open, as pictures landing on 34pt tiles made.
+        if isOpen, placedGeneration == generation, let before = placed, before.size != frame.size {
+            PelmetLog.log("panel: \(Int(before.width))×\(Int(before.height)) → \(Int(frame.width))×\(Int(frame.height)), left edge \(Int(before.minX)) → \(Int(frame.minX))")
+        }
+        placedGeneration = generation
         if let style = foldMotion {
             foldMotion = nil
             resizeGlass(to: frame, style: style)
@@ -1133,6 +1147,8 @@ final class PanelPresenter: RevealPresenter {
         content.showsAlwaysHidden = alwaysShown
         content.motion = Self.foldStyle(appState.settings.revealAnimation)
         content.fold = options.alwaysHiddenFold
+        // The panel draws apps' own icons, never screen pictures, so the row's
+        // tiles stay one width (upstream #102 sizes them to pictures).
         content.blocks = shown.map { entry in
             PanelBlock(
                 kind: entry.section.kind,
@@ -1395,7 +1411,7 @@ final class PanelPresenter: RevealPresenter {
         // the tile it was (the tile's y runs down, the screen's up).
         let mouse = NSEvent.mouseLocation
         let center = CGPoint(x: mouse.x - (pointer.x - wellCenter.x), y: mouse.y + (pointer.y - wellCenter.y))
-        let ghost = PanelDragGhost(art: art, grid: block.grid, appearance: window.appearance)
+        let ghost = PanelDragGhost(art: art, grid: block.grid, tileWidth: block.grid.tileWidth(of: tile), appearance: window.appearance)
         let drag = TileDrag(
             tile: tile, key: key, origin: origin, ghost: ghost,
             grab: CGSize(width: mouse.x - center.x, height: mouse.y - center.y),

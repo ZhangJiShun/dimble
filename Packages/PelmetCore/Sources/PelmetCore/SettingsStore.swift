@@ -219,6 +219,12 @@ public enum ExtraKind: String, Codable, CaseIterable, Sendable {
     /// whatever the allowlist names (#99). A Pelmet-drawn twin posts the
     /// user's own Quick Note shortcut (symbolic hotkey 190).
     case quickNote
+    /// A Live Activity is running (#106). Every hide assertion takes the
+    /// pills off the bar and nothing exempts them; MenuBarAgent's log says
+    /// which app started one and when it ends (`LiveActivities`), so an
+    /// indicator can follow along, and a click lifts the hide for the real
+    /// pill.
+    case liveActivity
 }
 
 /// When an activity-driven item sits in the bar — System Settings' "Always
@@ -301,6 +307,13 @@ public struct ExtraItemSpec: Codable, Equatable, Identifiable, Sendable {
     /// The activity-driven kinds (launchers, media controls, Time Machine,
     /// Focus); nil reads as the kind's default (`ExtraKind.defaultShowRule`).
     public var showRule: ExtraShowRule?
+    /// Focus and Time Machine's "While a Focus is on" / "While backing up"
+    /// on their Settings row, like the Timer's: off the bar while idle,
+    /// wherever they sit, and out on their own while active. `showRule` then
+    /// keeps the card's Show when it matters choice for when this is off. A
+    /// field of its own, not a third `ExtraShowRule`: an older build that
+    /// meets an unknown rule drops every Dimble item.
+    public var onlyWhileActive: Bool?
 
     public init(
         id: UUID = UUID(),
@@ -310,7 +323,8 @@ public struct ExtraItemSpec: Codable, Equatable, Identifiable, Sendable {
         bundleID: String? = nil,
         appName: String? = nil,
         showRule: ExtraShowRule? = nil,
-        style: ExtraStyle? = nil
+        style: ExtraStyle? = nil,
+        onlyWhileActive: Bool? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -320,9 +334,17 @@ public struct ExtraItemSpec: Codable, Equatable, Identifiable, Sendable {
         self.bundleID = bundleID
         self.appName = appName
         self.showRule = showRule
+        self.onlyWhileActive = onlyWhileActive
     }
 
     public var resolvedShowRule: ExtraShowRule { showRule ?? kind.defaultShowRule }
+    /// Off the bar while idle (Focus and Time Machine only).
+    public var isOnlyWhileActive: Bool { kind.showsWhenItMatters && onlyWhileActive == true }
+    /// Out on the bar on its own while active, whatever its section: the
+    /// card's rule, or the row's "only while active".
+    public var comesOutWhileActive: Bool {
+        kind.showsWhenItMatters && (isOnlyWhileActive || resolvedShowRule == .whenActive)
+    }
     public var resolvedStyle: ExtraStyle { style ?? .static }
 
     /// Stable ItemID title. Singleton kinds keep fixed titles (section
@@ -341,6 +363,7 @@ public struct ExtraItemSpec: Codable, Equatable, Identifiable, Sendable {
         case .siri: "Pelmet.Siri"
         case .focus: "Pelmet.Focus"
         case .quickNote: "Pelmet.QuickNote"
+        case .liveActivity: "Pelmet.LiveActivity"
         }
     }
 }
@@ -351,14 +374,17 @@ public struct ExtraItemSpec: Codable, Equatable, Identifiable, Sendable {
 /// Glyph for Pelmet's own menu bar icon. Each style has a concealed and a
 /// revealed face so the icon keeps pointing at what a click will do.
 public enum StatusIconStyle: String, Codable, CaseIterable, Sendable, Identifiable {
-    case chevron, arrow, eye, dots, grid, panel, dot, smallDot
+    case chevron, wideChevron, arrow, eye, dots, grid, panel, dot, smallDot
 
     public var id: String { rawValue }
 
-    /// SF Symbol name for the current bar state.
+    /// SF Symbol name for the current bar state. The wide chevron is no
+    /// symbol: the app draws it in the site's proportions (#101), and this
+    /// is the nearest symbol for anything that only takes a name.
     public func symbol(revealed: Bool) -> String {
         switch self {
         case .chevron: revealed ? "chevron.compact.right" : "chevron.compact.left"
+        case .wideChevron: revealed ? "chevron.right" : "chevron.left"
         case .arrow: revealed ? "arrow.right" : "arrow.left"
         case .eye: revealed ? "eye" : "eye.slash"
         case .dots: "ellipsis"
@@ -439,6 +465,19 @@ public struct SettingsStore: Codable, Equatable, Sendable {
         extraItems.contains { ExtraKind.collateralReplicas.contains($0.kind) }
     }
 
+    /// The Live Activities item stands in for the pills, so it's only there
+    /// when live mode isn't drawing them: switched off, or without Screen
+    /// Recording.
+    public func offersLiveActivityItem(screenRecording: Bool) -> Bool {
+        !(screenRecording && showLiveActivities)
+    }
+
+    /// The extras that get a place on the bar.
+    public func barExtraItems(screenRecording: Bool) -> [ExtraItemSpec] {
+        offersLiveActivityItem(screenRecording: screenRecording)
+            ? extraItems : extraItems.filter { $0.kind != .liveActivity }
+    }
+
     /// What the engine holds: the user's choice, forced on while a replica
     /// is on.
     public var effectiveHideSystemExtras: Bool {
@@ -463,6 +502,12 @@ public struct SettingsStore: Codable, Equatable, Sendable {
     /// Registered only while `clockClickOpensNotificationCenter` is on; the
     /// row lives under that toggle. Never off there (⌫ restores the default).
     public var notificationCenterHotkey: HotkeySpec? = .notificationCenterDefault
+
+    /// Live mode: while a Live Activity runs, its pill shows next to the «
+    /// and the system icons Dimble hides come back, the bar beneath held
+    /// under a picture. Needs Screen Recording for that picture. Independent
+    /// of the Live Activities item, which only follows what runs.
+    public var showLiveActivities: Bool = true
 
     /// A found update posts a user notification instead of Sparkle's window
     /// interrupting whatever the user is doing. Off: only the About pane
@@ -562,6 +607,7 @@ public struct SettingsStore: Codable, Equatable, Sendable {
         case notifyOnUpdates, barRightClickMenu, betaUpdates
         case statusIconStyle
         case clockClickOpensNotificationCenter, notificationCenterHotkey
+        case showLiveActivities
         case orderEdits
         case hiddenIconsIn, panel
         case showRules
@@ -600,6 +646,7 @@ public struct SettingsStore: Codable, Equatable, Sendable {
         statusIconStyle = c.field(StatusIconStyle.self, .statusIconStyle, defaults.statusIconStyle)
         clockClickOpensNotificationCenter = c.field(Bool.self, .clockClickOpensNotificationCenter, defaults.clockClickOpensNotificationCenter)
         notificationCenterHotkey = c.field(HotkeySpec?.self, .notificationCenterHotkey, defaults.notificationCenterHotkey) ?? defaults.notificationCenterHotkey
+        showLiveActivities = c.field(Bool.self, .showLiveActivities, defaults.showLiveActivities)
         orderEdits = c.field(OrderEdits.self, .orderEdits, defaults.orderEdits)
         hiddenIconsIn = c.field(RevealTarget.self, .hiddenIconsIn, defaults.hiddenIconsIn)
         panel = c.field(PanelOptions.self, .panel, defaults.panel)

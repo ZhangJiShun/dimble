@@ -82,14 +82,20 @@ public actor ItemEnumerator {
             // real button still reports the item.
             for (pid, groupsOfApp) in standIns {
                 guard let extras = extrasByPID[pid] else { continue }
-                let titles = Self.standInTitles(
+                let bundle = groupsOfApp[0].group.host.id
+                // A section helper hosts only `Pelmet.`-titled own items. Its
+                // lone unread group as `Item-0` keyed the helper itself as an
+                // app (`bundle:…items.alwaysHidden`): no section, so Visible,
+                // a "Dimble Items" tile out of place and an Apply (1) that
+                // came back after every Apply (Gab, 2026-10-29).
+                let helperGuess = extras.naming == .unread && PelmetBundle.helperIDs.contains(bundle)
+                let titles = helperGuess ? groupsOfApp.map { _ in nil } : Self.standInTitles(
                     forGroups: groupsOfApp.map(\.group.frame), naming: extras.naming, items: extras.items
                 )
                 for (entry, title) in zip(groupsOfApp, titles) {
                     guard let title else { continue }
                     described[entry.slot] = entry.group.item(titled: title)
                 }
-                let bundle = groupsOfApp[0].group.host.id
                 let unnamed = titles.filter { $0 == nil }.count
                 let unread = extras.naming == .unread
                 logOnce(unnamed == 0
@@ -297,15 +303,39 @@ public actor ItemEnumerator {
         guard pid > 0 else { return nil }
         let app = NSRunningApplication(processIdentifier: pid)
         if let id = app?.bundleIdentifier { return HostBundle(id: id, bundleless: false) }
-        var url = app?.executableURL ?? executableURL(ofPID: pid)
-        while let current = url, current.path != "/" {
+        let start = app?.executableURL ?? executableURL(ofPID: pid)
+        for current in start.map(Self.ancestors(of:)) ?? [] {
             if current.pathExtension == "app", let id = Bundle(url: current)?.bundleIdentifier {
                 logOnce("enumerate: bundle-less host → \(id) (\(app?.executableURL?.lastPathComponent ?? "?"))", pid: pid)
                 return HostBundle(id: id, bundleless: true)
             }
-            url = current.deletingLastPathComponent()
         }
         return nil
+    }
+
+    /// `url` and every folder above it, nearest first, stopping below "/".
+    ///
+    /// `NSRunningApplication.executableURL` is a bridged NSURL, and on a path
+    /// holding a doubled slash its `deletingLastPathComponent()` appends
+    /// "../" instead of climbing: "…/T//winetemp-…/steam.exe" walks to
+    /// "…/T//..", then "…/T//../..", and never reaches "/". Wine writes
+    /// exactly that path, so the enumerate walk spun on a live bar, growing
+    /// the string three bytes a turn and taking the hide down with it
+    /// (fif7y/dimble#133: 10.5 GB to 13.1 GB in 11 s, one core pinned).
+    /// Standardizing collapses the slash; the component count caps the climb
+    /// whatever else a URL does.
+    static func ancestors(of url: URL) -> [URL] {
+        var out: [URL] = []
+        var current = url.standardizedFileURL
+        var left = current.pathComponents.count
+        while current.path != "/", left > 0 {
+            out.append(current)
+            left -= 1
+            let next = current.deletingLastPathComponent()
+            if next == current { break }
+            current = next
+        }
+        return out
     }
 
     private func executableURL(ofPID pid: pid_t) -> URL? {
@@ -424,7 +454,7 @@ public actor ItemEnumerator {
             // Per element: a child read through a hung app waits the 6s default.
             AXUIElementSetMessagingTimeout(element, EngineTiming.axAgentTimeout)
             var out: CFTypeRef?
-            return AXUIElementCopyAttributeValue(element, name as CFString, &out) == .success ? out : nil
+            return axCopyAttribute(element, name as CFString, &out) == .success ? out : nil
         }
         func children(of element: AXUIElement) -> [AXUIElement] {
             value(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
@@ -527,7 +557,7 @@ public actor ItemEnumerator {
 
     private func copyAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, name as CFString, &value)
+        axCopyAttribute(element, name as CFString, &value)
         return value
     }
 }

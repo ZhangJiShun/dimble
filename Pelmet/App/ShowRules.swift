@@ -11,6 +11,7 @@
 
 import AppKit
 import IOKit.ps
+import Network
 import notify
 import PelmetCore
 import PelmetEngine
@@ -34,6 +35,9 @@ final class ShowRules {
     private var wifiInterface: String?
     private var wifiDown = false
     private var wifiGraceTask: Task<Void, Never>?
+    private var hotspotMonitor: NWPathMonitor?
+    private var onHotspot = false
+    private var hotspotHoldTask: Task<Void, Never>?
     private var sleepObservers: [NSObjectProtocol] = []
     /// Between willSleep and didWake: a grace that runs out then does
     /// nothing, didWake starts it over.
@@ -50,6 +54,7 @@ final class ShowRules {
     isolated deinit {
         stopBattery()
         stopWifi()
+        stopHotspot()
     }
 
     /// The rules as Settings holds them now: watchers start for a rule that
@@ -66,6 +71,10 @@ final class ShowRules {
             stopWifi()
             if new.wifiOn { watchWifi() }
         }
+        if new.wifiWatchesHotspot != old.wifiWatchesHotspot {
+            stopHotspot()
+            if new.wifiWatchesHotspot { watchHotspot() }
+        }
         evaluate()
     }
 
@@ -75,11 +84,13 @@ final class ShowRules {
         notify_register_dispatch(kIOPSNotifyPowerSource, &powerToken, .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.evaluate() }
         }
-        // The charge changes all day: listened to only for the rule that reads
+        // The charge changes all day: listened to only for the rules that read
         // it. The SDK has no percent-only key; this one fires when the percent
-        // or the time remaining changes.
-        if condition == .below20 {
-            notify_register_dispatch(kIOPSNotifyTimeRemaining, &percentToken, .main) { [weak self] _ in
+        // or the time remaining changes. Charging can end with neither moving,
+        // so a rule on it hears of any change to the power source.
+        if condition.watchesCharge {
+            let key = condition.watchesCharging ? kIOPSNotifyAnyPowerSource : kIOPSNotifyTimeRemaining
+            notify_register_dispatch(key, &percentToken, .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.evaluate() }
             }
         }
@@ -93,11 +104,13 @@ final class ShowRules {
         lastLine.removeValue(forKey: "battery")
     }
 
-    /// On battery power, and the internal battery's charge (nil with none).
-    private func batteryReading() -> (onBattery: Bool, percent: Int?) {
+    /// On battery power, the internal battery's charge (nil with none), and
+    /// whether it is charging right now.
+    private func batteryReading() -> (onBattery: Bool, percent: Int?, charging: Bool) {
         let info = IOPSCopyPowerSourcesInfo().takeRetainedValue()
         let providing = IOPSGetProvidingPowerSourceType(info).takeUnretainedValue() as String
         var percent: Int?
+        var charging = false
         let sources = IOPSCopyPowerSourcesList(info).takeRetainedValue() as [CFTypeRef]
         for source in sources {
             guard let description = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue() as? [String: Any],
@@ -107,9 +120,15 @@ final class ShowRules {
             else { continue }
             // Rounded, like the percentage Battery itself draws.
             percent = Int((Double(current) / Double(capacity) * 100).rounded())
+            charging = description[kIOPSIsChargingKey] as? Bool ?? false
             break
         }
-        return (providing == kIOPSBatteryPowerValue, percent)
+        // Debug: `-pelmet.debug.onBattery YES` reads as unplugged at 10%, for a
+        // Battery out on its own on a Mac that is plugged in.
+        if UserDefaults.standard.bool(forKey: "pelmet.debug.onBattery") { return (true, 10, false) }
+        // `-pelmet.debug.charging YES`, on a Mac that is plugged in and full.
+        if UserDefaults.standard.bool(forKey: "pelmet.debug.charging") { return (false, 50, true) }
+        return (providing == kIOPSBatteryPowerValue, percent, charging)
     }
 
     // MARK: Wi-Fi
@@ -160,6 +179,7 @@ final class ShowRules {
                         self.wifiDown = false
                         self.note("wifi", "Wi-Fi grace ran across sleep, starts over on wake")
                     }
+                    if self.hotspotHoldTask != nil { self.holdHotspot() }
                     self.evaluate()
                 }
             },
@@ -193,13 +213,77 @@ final class ShowRules {
         return powered && !joined
     }
 
+    // MARK: Hotspot
+
+    /// Apple counts a Personal Hotspot as an expensive path, and reading that
+    /// asks for no permission, where the network's name needs Location
+    /// (#121). This monitor sees only Wi-Fi's path. Low Data Mode is
+    /// `isConstrained`, on any network, so that flag doesn't count.
+    private func watchHotspot() {
+        let monitor = NWPathMonitor(requiredInterfaceType: .wifi)
+        monitor.pathUpdateHandler = { [weak self] path in
+            // Debug: `-pelmet.debug.onHotspot YES` reads as on a hotspot, for
+            // the rule's show path on a Mac that isn't on one.
+            let hotspot = UserDefaults.standard.bool(forKey: "pelmet.debug.onHotspot")
+                || (path.status == .satisfied && path.isExpensive)
+            MainActor.assumeIsolated { self?.readHotspot(hotspot) }
+        }
+        monitor.start(queue: .main)
+        hotspotMonitor = monitor
+    }
+
+    private func stopHotspot() {
+        hotspotMonitor?.cancel()
+        hotspotMonitor = nil
+        onHotspot = false
+        hotspotHoldTask?.cancel()
+        hotspotHoldTask = nil
+        lastLine.removeValue(forKey: "hotspot")
+    }
+
+    private func readHotspot(_ hotspot: Bool) {
+        // A reading already queued when the rule went off has nothing to set.
+        guard rules.wifiWatchesHotspot else { return }
+        if hotspot {
+            hotspotHoldTask?.cancel()
+            hotspotHoldTask = nil
+            guard !onHotspot else { return }
+            onHotspot = true
+            note("hotspot", "Wi-Fi on a hotspot, Wi-Fi shows")
+            evaluate()
+        } else if onHotspot, hotspotHoldTask == nil {
+            holdHotspot()
+        }
+    }
+
+    /// The flag clears whenever Wi-Fi leaves its network, a roam included: the
+    /// icon goes only once it has stayed clear for the grace. Across sleep the
+    /// hold works like the Wi-Fi grace, starting over on wake.
+    private func holdHotspot() {
+        hotspotHoldTask?.cancel()
+        hotspotHoldTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.wifiGrace)
+            guard !Task.isCancelled, let self, !self.asleep else { return }
+            // Wi-Fi's own grace is still running: wait for it, or the icon
+            // blinks off between the two.
+            if self.wifiGraceTask != nil {
+                self.holdHotspot()
+                return
+            }
+            self.hotspotHoldTask = nil
+            self.onHotspot = false
+            self.note("hotspot", "Wi-Fi off the hotspot, Wi-Fi follows its section")
+            self.evaluate()
+        }
+    }
+
     // MARK: Evaluate
 
     private func evaluate() {
         var items: Set<ItemID> = []
         if let condition = rules.battery {
             let reading = batteryReading()
-            let met = condition.isMet(onBattery: reading.onBattery, percent: reading.percent)
+            let met = condition.isMet(onBattery: reading.onBattery, percent: reading.percent, charging: reading.charging)
             let charge = reading.percent.map { ", \($0)%" } ?? ""
             note("battery", met
                 ? "\(condition.rawValue) holds\(charge), Battery shows"
@@ -230,6 +314,7 @@ final class ShowRules {
                 items.insert(Self.wifi)
             }
         }
+        if onHotspot { items.insert(Self.wifi) }
         guard items != shown else { return }
         shown = items
         apply(items)

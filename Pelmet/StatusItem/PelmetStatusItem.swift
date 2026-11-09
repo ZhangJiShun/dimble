@@ -97,19 +97,16 @@ final class PelmetStatusItem {
     /// An available update earns a 5pt accent dot at the chevron's top
     /// right — the one surface most users ever look at. It lives until the
     /// install relaunches the app.
-    private var updateDot: NSView?
+    private var updateDot: AccentDotView?
 
     func showUpdateDot(_ show: Bool) {
         guard let button = item.button else { return }
         if show, updateDot == nil {
             let size: CGFloat = 5
-            let dot = NSView(frame: NSRect(
+            let dot = AccentDotView(frame: NSRect(
                 x: button.bounds.width - size - 3, y: button.bounds.height - size - 3,
                 width: size, height: size
             ))
-            dot.wantsLayer = true
-            dot.layer?.backgroundColor = PelmetAccent.nsColor.cgColor
-            dot.layer?.cornerRadius = size / 2
             dot.autoresizingMask = [.minXMargin, .minYMargin]
             button.addSubview(dot)
             updateDot = dot
@@ -147,6 +144,10 @@ final class PelmetStatusItem {
         let key = "\(style.rawValue) \(revealedFace) \(warning)"
         guard key != appliedImage || item.button?.image == nil else { return }
         appliedImage = key
+        if style == .wideChevron {
+            item.button?.image = WideChevron.image(revealed: revealedFace, warning: warning)
+            return
+        }
         let symbol = NSImage(
             systemSymbolName: style.symbol(revealed: revealedFace),
             accessibilityDescription: "Dimble"
@@ -357,6 +358,39 @@ final class PelmetStatusItem {
     }
 }
 
+/// The wide chevron (#101): the one on the site and in the README's
+/// animation, where SF's compact chevron is 3.5pt wide and reads squashed
+/// on a 15" Air. The animation's `M7.5 2 L3 8 L7.5 14` (a 10×16 box drawn
+/// at 0.9) gives the arms: 4.05pt across, 10.8pt tall, on a 1.8pt round
+/// stroke that sits between the site's two weights and closer to the bar's
+/// symbols. Both faces share one canvas, so a flip never moves it.
+enum WideChevron {
+    static func image(revealed: Bool, warning: Bool = false) -> NSImage {
+        let size = NSSize(width: 8, height: 16)
+        let image = NSImage(size: size, flipped: false) { _ in
+            let width: CGFloat = 4.05, height: CGFloat = 10.8
+            let left = (size.width - width) / 2, bottom = (size.height - height) / 2
+            let tip = revealed ? left + width : left
+            let ends = revealed ? left : left + width
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: ends, y: bottom + height))
+            path.line(to: NSPoint(x: tip, y: bottom + height / 2))
+            path.line(to: NSPoint(x: ends, y: bottom))
+            path.lineWidth = 1.8
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            (warning ? NSColor.systemOrange : .black).setStroke()
+            path.stroke()
+            return true
+        }
+        // A template, so the bar inks it for light and dark like a symbol;
+        // the warning is the palette symbol's orange, its own colour.
+        image.isTemplate = !warning
+        image.accessibilityDescription = "Dimble"
+        return image
+    }
+}
+
 /// Shared menu target so context menus built from separators and the status
 /// item reuse one implementation.
 final class AppMenuTarget: NSObject {
@@ -384,4 +418,39 @@ final class AppMenuTarget: NSObject {
     /// rather than straight in Sparkle's window.
     @objc func installUpdate() { SparkleController.shared.openUpdateHub() }
     @objc func quit() { NSApp.terminate(nil) }
+}
+
+/// The update dot. Its color is resolved when it draws, so it follows the
+/// accent chosen in Settings and the bar's light or dark appearance.
+final class AccentDotView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = frame.width / 2
+        needsDisplay = true
+        track()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = PelmetAccent.nsColor.cgColor
+        }
+    }
+
+    /// Redraw whenever the chosen accent changes; stops once the dot is gone.
+    private func track() {
+        withObservationTracking {
+            _ = AccentStore.shared.choice
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.needsDisplay = true
+                self.track()
+            }
+        }
+    }
 }

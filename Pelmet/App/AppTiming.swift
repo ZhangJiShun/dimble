@@ -33,6 +33,17 @@ enum AppTiming {
     /// Camera & mic relay (#68): longest Apple's pill may take to rejoin
     /// the AX tree after the drop before the relay gives up on it.
     static let audioVideoPillWait: TimeInterval = 1
+    /// Live Activities lift (#106): a lift the re-hide ended sooner than this
+    /// didn't give the pills time to say anything about them.
+    static let liftPillWait: TimeInterval = 3
+    /// Live Activities lift (#106): the re-hide cover's watchdog, past its
+    /// longest settle (2s quiet + 1.5s for the concealed items + the
+    /// agent's fade + 1s quiet again).
+    static let liftCoverSafety: TimeInterval = 6
+    /// A picture of the concealed bar taken at the lift's click reaches this
+    /// far left of the idle one: the extras and the pills the lift lets
+    /// back push the icons left (the capture stops at the notch).
+    static let liftPictureLeftRoom: CGFloat = 200
     /// Notification Center's panel slides in over ~100ms from Pelmet's
     /// press; the blink cover crossfades from the bare still to the
     /// under-panel one over that slide, starting at the press.
@@ -178,6 +189,9 @@ enum AppTiming {
     /// walks, so the app reads TCC directly; 2s keeps a flipped toggle in
     /// System Settings visible within a breath without a hot loop.
     static let accessibilityPoll: Duration = .seconds(2)
+    /// Screen Recording grant poll, only while live mode waits on it
+    /// (`ExtrasManager.syncLiveActivityWatcher`): same breath as above.
+    static let screenRecordingPoll: Duration = .seconds(2)
     /// Apply (docs/CORE-SETS.md): the pass borrows the pointer only after
     /// this much quiet, bounded so a restless pointer still gets the
     /// shielded drag rather than a pass that never starts.
