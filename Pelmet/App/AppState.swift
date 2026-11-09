@@ -4054,17 +4054,20 @@ final class AppState {
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                // An Apply pass needs the frames it measured to stay put.
-                let bandReason = self.bandMonitor?.rehideDeferReason()
                 // An open panel holds while the pointer is on it or on
                 // its way there from the bar; a shortcut's until the
                 // pointer has been on it.
                 let panelHolds = self.panelShowsReveal && self.panelPresenter.holdsReveal
-                if self.editorHoldsBar
+                // An Apply pass needs the frames it measured to stay put.
+                let held = self.editorHoldsBar
                     || (!self.transitions.anchored && self.pointerDisplayBehavior == .alwaysShowAll)
                     || self.applying
                     || panelHolds
-                    || bandReason != nil {
+                // The band's reason reads the whole window list: only when
+                // nothing cheaper already holds (every 1.5s while a panel
+                // stayed open, 2026-11-09 audit).
+                let bandReason = held ? nil : self.bandMonitor?.rehideDeferReason()
+                if held || bandReason != nil {
                     if !self.rehideDeferLogged {
                         self.rehideDeferLogged = true
                         PelmetLog.log("rehide: deferred — editor=\(self.editorHoldsBar) policy=\(self.pointerDisplayBehavior) apply=\(self.applying) panel=\(panelHolds) band=\(bandReason?.rawValue ?? "none")")
@@ -4075,6 +4078,7 @@ final class AppState {
                 }
             }
         }
+        rehideTimer?.tolerance = 0.1
     }
 
     /// Menubar-positional sections: Pelmet's own chevron is the visible/hidden
