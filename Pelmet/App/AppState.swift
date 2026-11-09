@@ -4340,7 +4340,11 @@ final class AppState {
     /// Which icons those are, for the panel's "Didn't fit" (plan S4: the
     /// notice's list, not `ApplyPass.trapped`).
     @ObservationIgnored private(set) var overflowTrappedItems: [ItemID] = []
-    private var lastOverflowRead = 0
+    /// The settle-and-recheck an overlap waits on before "Didn't fit" takes
+    /// it (`confirmOverflowEntry`).
+    @ObservationIgnored private var overflowConfirm: Task<Void, Never>?
+    /// Set only while the confirmed re-read runs `noteOverflow`.
+    @ObservationIgnored private var overflowEntryConfirmed = false
     /// The editor's full-bar hint: `overflowTrappedCount` once it has held
     /// `AppTiming.overflowNoticeDelay`. Shown at once, the note flashed in
     /// on every drop and shoved the editor down (2026-10-07).
@@ -4845,10 +4849,17 @@ final class AppState {
             trappedItems.append(chevron)
         }
         let trapped = trappedItems.count
-        // Two consecutive reads to enter (a mid-attach walk at boot read two
-        // items at one x for 200ms), one to leave.
-        defer { lastOverflowRead = trapped }
-        if trapped > 0, overflowTrappedCount == 0, lastOverflowRead == 0, !chevronTrapped { return }
+        // Entering takes a confirmation, leaving one read. Two consecutive
+        // reads were not enough: the post-swap and rest walks of one converge
+        // both fall inside the bar's reflow and read WeChat and Focus at one
+        // x, and with the bar then at rest no walk came to clear it — "Didn't
+        // fit" listed two icons the bar was drawing (2026-11-09 11:05, 77
+        // flips in one log). The confirmation reads again once the reflow is
+        // over and only counts what the native « is actually on the bar for.
+        if trapped > 0, overflowTrappedCount == 0, !chevronTrapped, !overflowEntryConfirmed {
+            confirmOverflowEntry()
+            return
+        }
         // Same count, other icons (Velja behind the « where Snib was): the
         // list follows every read the count takes, or "Didn't fit" kept
         // naming the icon that had left.
@@ -4873,6 +4884,33 @@ final class AppState {
                 self.overflowNoticeTask = nil
                 self.overflowNoticeCount = self.overflowTrappedCount
             }
+        }
+    }
+
+    /// An overlap read on the main bar counts as "behind the «" only if it
+    /// is still there after the reflow settles and the native « is on that
+    /// bar: macOS draws the « only while something is behind it (#81).
+    private func confirmOverflowEntry() {
+        guard overflowConfirm == nil else { return }
+        overflowConfirm = Task { [weak self] in
+            try? await Task.sleep(for: AppTiming.overflowEntrySettle)
+            guard !Task.isCancelled else { return }
+            let main = CGDisplayBounds(CGMainDisplayID())
+            let toggles = await Task.detached { OverflowToggle.listedToggles().map(\.frame) }.value
+            guard let self else { return }
+            self.overflowConfirm = nil
+            guard toggles.contains(where: { MenuBarGeometry.isInBand($0, ofDisplay: main) }) else {
+                PelmetLog.log("overflow: overlap read with no native « on the bar — not counted")
+                return
+            }
+            // A pass or a hold that began meanwhile: its read comes after it.
+            guard self.picturePassSections == nil, self.overflowReadHold == nil, let snapshot = self.snapshot else {
+                self.overflowReadPending = true
+                return
+            }
+            self.overflowEntryConfirmed = true
+            defer { self.overflowEntryConfirmed = false }
+            self.noteOverflow(in: snapshot)
         }
     }
 

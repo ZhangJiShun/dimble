@@ -189,6 +189,9 @@ enum AppTiming {
     /// walks, so the app reads TCC directly; 2s keeps a flipped toggle in
     /// System Settings visible within a breath without a hot loop.
     static let accessibilityPoll: Duration = .seconds(2)
+    /// The same poll once granted: it only watches for a revoke, which
+    /// the engine's empty walks also report. 1800 wakes an hour became 360.
+    static let accessibilityGrantedPoll: Duration = .seconds(10)
     /// Screen Recording grant poll, only while live mode waits on it
     /// (`ExtrasManager.syncLiveActivityWatcher`): same breath as above.
     static let screenRecordingPoll: Duration = .seconds(2)
