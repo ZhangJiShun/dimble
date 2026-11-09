@@ -110,6 +110,10 @@ enum AppTiming {
     /// activation, Space switch): a Space switch animates ~0.5s. A mouse-up
     /// is checked at once — the window is already where the drag left it.
     static let backdropSettle: TimeInterval = 0.6
+    /// Plain clicks (no drag) share one backdrop look at most this often:
+    /// a click moves no window, and the one it closes or zooms is seen
+    /// within this.
+    static let backdropClickCoalesce: TimeInterval = 1.0
     /// A held picture's backdrop check waits this long after the last
     /// signal: a click's check ran before the clicked app raised its window,
     /// and the activation's check `backdropSettle` on retook every held bar
