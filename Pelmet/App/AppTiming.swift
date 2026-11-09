@@ -285,6 +285,9 @@ enum AppTiming {
     /// When the only sign the press showed something is the app coming to
     /// the front, the item stays revealed at most this long.
     static let pressFrontCap: TimeInterval = 3
+    /// When the sign is a window of the item's own app (not a menu or a
+    /// popover), the item stays revealed under the cover at most this long.
+    static let pressOwnWindowCap: TimeInterval = 3
     /// A revealed item is clicked once its frame reads the same on two
     /// walks in a row (within this many points), the agent's slide-in over.
     /// Bounded: a frame that never settles is clicked where it last read.

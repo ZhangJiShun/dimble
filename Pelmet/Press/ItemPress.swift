@@ -399,7 +399,16 @@ final class ItemPress {
         _ key: ItemID, sign: Sign, pid: pid_t, before: WindowCounts, geometry: Geometry,
         run: Run, hold: () -> Void, elapsed ms: () -> Int
     ) async -> Bool {
-        let cap = Date().addingTimeInterval(sign == .appInFront ? AppTiming.pressFrontCap : AppTiming.pressMenuCap)
+        // An app's own window (Clash Verge's, Cockpit Tools') is no menu: it
+        // stays open for minutes and is not orphaned by the conceal, while
+        // the cover held all that time froze the bar and took its clicks for
+        // the 60s cap (35 Clash presses, every one to the cap, 2026-11-09).
+        let span: TimeInterval = switch sign {
+        case .appInFront: AppTiming.pressFrontCap
+        case .ownWindow: AppTiming.pressOwnWindowCap
+        case .window: AppTiming.pressMenuCap
+        }
+        let cap = Date().addingTimeInterval(span)
         while Date() < run.capped(cap) {
             hold()
             let still: Bool
