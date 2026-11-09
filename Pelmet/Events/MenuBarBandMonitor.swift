@@ -870,8 +870,13 @@ final class MenuBarBandMonitor {
         // mouseMoved, but a click has no next event and would be swallowed.
         let layer = window[kCGWindowLayer as String] as? Int ?? 0
         guard layer >= 0 else { return nil }
+        // A window drawn all but fully transparent hides nothing: WeChat
+        // keeps a full-screen one at L27 that refused 39 bar clicks and
+        // hover in one log (2026-11-09).
+        let alpha = window[kCGWindowAlpha as String] as? Double ?? 1
+        guard alpha >= 0.05 else { return nil }
         let owner = window[kCGWindowOwnerName as String] as? String ?? "pid \(pid)"
-        return "\(owner) \(Int(width))×\(Int(height))@y\(Int(y)) L\(layer)"
+        return "\(owner) \(Int(width))×\(Int(height))@y\(Int(y)) L\(layer)\(alpha < 1 ? String(format: " α%.2f", alpha) : "")"
     }
 
     private func isInMenuBarBand(_ point: NSPoint, of screen: NSScreen) -> Bool {
