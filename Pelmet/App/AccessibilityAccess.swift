@@ -27,7 +27,13 @@ final class AccessibilityMonitor {
         guard task == nil else { return }
         task = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: interval)
+                // Granted, the read only watches for a revoke: no need for
+                // the waiting cadence's breath, and the tolerance lets the
+                // system fold the wake into others (2026-11-09 audit).
+                let granted = self?.granted ?? false
+                try? await Task.sleep(for: granted ? max(interval, AppTiming.accessibilityGrantedPoll) : interval,
+                                      tolerance: granted ? .seconds(2) : .milliseconds(200))
+                guard !Task.isCancelled else { return }
                 self?.refresh()
             }
         }

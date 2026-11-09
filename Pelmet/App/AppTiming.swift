@@ -243,6 +243,10 @@ enum AppTiming {
     /// own reflow after a drop or at Apply's start overflows for 0.4–1.3s
     /// (six times in one morning, 2026-10-07).
     static let overflowNoticeDelay: Duration = .seconds(2)
+    /// How long an overlap on the main bar waits before it is read again
+    /// against the native « (`AppState.confirmOverflowEntry`). A converge's
+    /// reflow read two drawn icons at one x for 0.3–0.8s (2026-11-09).
+    static let overflowEntrySettle: Duration = .milliseconds(1200)
     /// Post-drag read: the agent animates the drop (~300ms slide, measured
     /// 2026-09-08) and a single fixed-delay read judged mid-flight frames as
     /// misses. Wait the floor, then re-read every poll until the dragged
