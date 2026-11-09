@@ -12,3 +12,4 @@ xcuserdata/
 *.dmg
 # xcodegen-generated from project.yml info block
 Pelmet/Info.plist
+__pycache__/

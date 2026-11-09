@@ -122,7 +122,7 @@ final class SharePlayStatus {
         guard controlCenterWatch == nil else { return }
         controlCenterWatch = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: .seconds(30), tolerance: .seconds(5))
                 guard let self, !Task.isCancelled, !self.stopped else { return }
                 guard !self.recovering, let started = Self.controlCenterStart(),
                       (self.lastController ?? .distantPast) < started else { continue }
