@@ -1,4 +1,5 @@
 import Foundation
+import PelmetCore
 import Testing
 @testable import PelmetEngine
 
@@ -23,5 +24,13 @@ import Testing
 
     @Test func noSwapYetIsAtRest() {
         #expect(EngineTiming.walkAtRest(startedAt: swap, lastSwapAt: .distantPast))
+    }
+
+    @Test func snapshotContentEqualityIgnoresTimeButNotShownAlone() {
+        let t = Date(timeIntervalSinceReferenceDate: 0)
+        let id = ItemID(rawValue: "status:app.example::Item")
+        let base = EngineSnapshot(items: [], concealed: [], takenAt: t)
+        #expect(base.contentEquals(EngineSnapshot(items: [], concealed: [], takenAt: t.addingTimeInterval(5))))
+        #expect(!base.contentEquals(EngineSnapshot(items: [], concealed: [], takenAt: t, shownAlone: [id])))
     }
 }

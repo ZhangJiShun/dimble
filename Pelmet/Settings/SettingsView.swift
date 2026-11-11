@@ -544,13 +544,13 @@ private struct SidebarRow: View {
 
 // MARK: - Segments
 
-/// De-boxed button group: soft-fill track, the selected chip carried by the
-/// brand accent — every option visible at once, no menu to open.
 /// Outbound help links. The FAQ is one page with named anchors.
 enum PelmetLinks {
     static let faqAppLaunchers = URL(string: "https://github.com/fif7y/dimble/blob/main/docs/FAQ.md#app-launchers")!
 }
 
+/// De-boxed button group: soft-fill track, the selected chip carried by the
+/// brand accent — every option visible at once, no menu to open.
 struct PelmetSegments<T: Hashable>: View {
     @Binding var selection: T
     let options: [(T, LocalizedStringKey)]
@@ -639,7 +639,6 @@ struct SettingsCard<Content: View>: View {
     }
 }
 
-/// Title + optional caption on the left, any control on the right.
 /// A menu that sizes to the SELECTED value, not to its widest option.
 /// SwiftUI's `.pickerStyle(.menu)` reserves room for the longest entry, so
 /// one long translation inflated the closed control and squeezed the row's
@@ -703,6 +702,7 @@ private struct MenuPickerChrome: ViewModifier {
     }
 }
 
+/// Title + optional caption on the left, any control on the right.
 struct SettingRow<Control: View>: View {
     let title: Text
     var caption: LocalizedStringKey? = nil
@@ -954,6 +954,7 @@ private struct GeneralPane: View {
                 SettingRow(title: "Icon") {
                     StatusIconPicker(selection: binding(\.statusIconStyle))
                 }
+                .settingAnchor("statusIconStyle")
             }
             SettingRow(title: "Accent color") {
                 AccentSwatches()
@@ -1024,9 +1025,11 @@ private struct GeneralPane: View {
         SettingsCard(title: "Permissions") {
             permissions
         }
-        .task {
+        .task(id: appState.accessibilityGranted && appState.screenRecordingGranted) {
             // The grant lands in System Settings, outside our window —
             // poll while the tab is up so the rows flip without a relaunch.
+            // With both granted there is nothing left to wait for.
+            guard !(appState.accessibilityGranted && appState.screenRecordingGranted) else { return }
             while !Task.isCancelled {
                 appState.refreshScreenRecording()
                 try? await Task.sleep(for: .seconds(1))
@@ -1406,13 +1409,38 @@ private struct IconSpacingRow: View {
 
 // MARK: - Displays
 
+/// The connected screens as something a view can depend on: `NSScreen.screens`
+/// alone is not observable, so a display plugged in with Settings open left
+/// the Displays list and the Panel tab's "Set per display" hint stale.
+@Observable @MainActor
+final class ConnectedScreens {
+    static let shared = ConnectedScreens()
+
+    private var revision = 0
+    @ObservationIgnored private var token: NSObjectProtocol?
+
+    private init() {
+        token = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.revision &+= 1 }
+        }
+    }
+
+    /// Reading this inside a body re-runs it when the screens change.
+    var screens: [NSScreen] {
+        _ = revision
+        return NSScreen.screens
+    }
+}
+
 private struct DisplaysPane: View {
     var body: some View {
         SettingsCard {
             Text("Every screen has its own menu bar, so each can hide or show.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            ForEach(NSScreen.screens, id: \.self) { screen in
+            ForEach(ConnectedScreens.shared.screens, id: \.self) { screen in
                 DisplayRow(screen: screen)
             }
         }
@@ -1649,6 +1677,8 @@ private struct AboutPane: View {
             VStack(spacing: 10) {
                 if SparkleController.shared.isConfigured {
                     updateRow
+                } else {
+                    UpstreamRow()
                 }
                 notesLink
                 Button("Replay the intro") {

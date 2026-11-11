@@ -5,9 +5,12 @@
 // closes the panel through the machine and opens the item's menu the way
 // ⌥⌘K does (ItemPress: alone, under a cover).
 //
-// Pictures: hidden icons are never drawn on the bar in this mode, so the
-// first open with tiles missing one runs the picture pass (decision D2);
-// app icons stand in until it lands.
+// Pictures (fork): tiles are always the apps' own icons (PanelItemImageSource),
+// never screen crops, so nothing is stored, kept on disk or waited for. The
+// picture pass survives for one job only: `checkIconsGone` runs it to look at
+// the real bar and learn which icons their apps switched off (`noIcon`).
+// `PanelTileArt.Image.picture` and the Settings preview's picture machinery
+// are therefore dead paths, kept so upstream merges stay small.
 
 import AppKit
 import PelmetCore
@@ -21,10 +24,8 @@ final class PanelPresenter: RevealPresenter {
     /// Both row and grid meet the menu bar's lower edge. The settings
     /// preview shares this gap; horizontal chevron alignment stays separate.
     static let gapBelowBar: CGFloat = 0
-    static let pastChevron: CGFloat = 6
 
     private weak var appState: AppState?
-    let pictures = ItemPictures()
     private var window: KeyableGlassPanel?
     private var hosting: PanelHostingView?
     /// The tracking area's owner, which it does not keep.
@@ -135,8 +136,6 @@ final class PanelPresenter: RevealPresenter {
     /// before the app in front has it; armed only while such a panel is up.
     private lazy var typingTap = HoverTypingTap { [weak self] typed in self?.typedOverHoverPanel(typed) }
     private var typingGrace: Task<Void, Never>?
-    /// Waiting on the pass under way, the preview's redraw among them.
-    private var passWaiters: [@MainActor () -> Void] = []
     private var motion: Motion?
     private var motionTimer: Timer?
     /// Set by a fold: the next `place` moves the glass in this style.
@@ -286,24 +285,17 @@ final class PanelPresenter: RevealPresenter {
         }
         isOpen = true
         generation += 1
-        let shown = refresh()
-        trace.mark("built", detail: "\(shown.tiles) tiles")
+        let tiles = refresh()
+        trace.mark("built", detail: "\(tiles) tiles")
         show(takeKey: !openedByHover, fadeIn: !wasOpen)
         // On screen from the next pass of the run loop: the `perf` line's
         // open → first frame.
         DispatchQueue.main.async { trace.finish("shown") }
-        // A kept picture (one from the last launch, #104) draws while the
-        // pass retakes it; a tile with none draws its app's icon.
-        let bare = lastContent?.art.filter { entry in
-            if case .item = entry.key, case .icon = entry.value.image { return true }
-            return false
-        }.count ?? 0
-        PelmetLog.log("panel: \(wasOpen ? "widened" : "open") (\(reason.map { "\($0)" } ?? "no reason")) — \(shown.tiles) tile(s), \(shown.missing.count) without a fresh picture (\(bare) with none), key=\(window?.isKeyWindow == true)")
+        PelmetLog.log("panel: \(wasOpen ? "widened" : "open") (\(reason.map { "\($0)" } ?? "no reason")) — \(tiles) tile(s), key=\(window?.isKeyWindow == true)")
         // Settled on the next turn, as the bar's reveal settles after its
         // effect returns: the machine is still in this dispatch.
         DispatchQueue.main.async { [weak self] in self?.appState?.panelDidSettle() }
         if reason == .barDrag { barDragging = true }
-        picturePassUnlessBarDrag(shown.missing)
         if !wasOpen, !barDragging { checkIconsGone() }
     }
 
@@ -394,8 +386,7 @@ final class PanelPresenter: RevealPresenter {
 
     func quietApplyEnded() {
         guard isOpen, tileDrag == nil else { return }
-        let shown = refresh()
-        picturePassIfNeeded(shown.missing)
+        refresh()
     }
 
     // MARK: - Window
@@ -883,10 +874,10 @@ final class PanelPresenter: RevealPresenter {
     // MARK: - Content
 
     /// Rebuilds the tiles and fits the window to them. Returns how many
-    /// tiles it drew and which items have no picture yet.
+    /// tiles it drew.
     @discardableResult
-    private func refresh() -> (tiles: Int, missing: [ItemID]) {
-        guard let appState else { return (0, []) }
+    private func refresh() -> Int {
+        guard let appState else { return 0 }
         let (_, hosting) = ensureWindow()
         draws &+= 1
         let screen = targetScreen()
@@ -896,7 +887,7 @@ final class PanelPresenter: RevealPresenter {
             min($0.frame.width - 2 * GlassPanel.edgeMargin, Self.debugCap) - 2 * PanelMetrics.row.padding
         }
         let aimed = tileDrag.flatMap { drag in drag.slot.map { (tile: drag.tile, slot: $0) } }
-        let (built, missing, model) = buildContent(
+        let (built, model) = buildContent(
             appState, layout: layout, query: query, selected: selected,
             foldOpen: foldOpen, alwaysRequested: sections.contains(.alwaysHidden), maxRowWidth: rowWidth, aimed: aimed, live: true)
         var content = built
@@ -942,7 +933,7 @@ final class PanelPresenter: RevealPresenter {
         showsGrip = content.layout == .panel && !content.isEmpty
         updateGrip()
         place(size)
-        return (content.art.count, missing)
+        return content.art.count
     }
 
     /// `live` is the panel on screen. The measuring pass has no drag, reports
@@ -1010,7 +1001,7 @@ final class PanelPresenter: RevealPresenter {
         history = CommandBarController.loadHistory()
     }
 
-    typealias Preview = (content: PanelContent, missing: [ItemID], model: PanelModel)
+    typealias Preview = (content: PanelContent, model: PanelModel)
 
     /// The panel as it would open now, for the Settings preview: its own
     /// filter, selection and fold.
@@ -1019,7 +1010,7 @@ final class PanelPresenter: RevealPresenter {
         readCorpusOnce(appState)
         let built = buildContent(appState, layout: layout, query: query, selected: selected,
                                  foldOpen: foldOpen, alwaysRequested: false)
-        return (built.content, built.missing, built.model)
+        return (built.content, built.model)
     }
 
     /// What the preview's selection becomes when `query` is typed: the model
@@ -1086,7 +1077,7 @@ final class PanelPresenter: RevealPresenter {
     private func buildContent(_ appState: AppState, layout: PanelGrid.Layout, query: String, selected: PanelTile?,
                               foldOpen: Bool, alwaysRequested: Bool, maxRowWidth: CGFloat? = nil,
                               aimed: (tile: PanelTile, slot: PanelSlot)? = nil, live: Bool = false)
-        -> (content: PanelContent, missing: [ItemID], model: PanelModel)
+        -> (content: PanelContent, model: PanelModel)
     {
         let options = appState.settings.panel
         let (proposed, items) = buildModel(appState, query: query, alwaysRequested: alwaysRequested)
@@ -1199,8 +1190,9 @@ final class PanelPresenter: RevealPresenter {
             }
         }
         content.selected = selected.flatMap { content.art[$0] == nil && $0 != .fold ? nil : $0 }
-        // No screen crop is needed to draw these native application icons.
-        return (content, [], base)
+        // No screen crop is needed to draw these native application icons:
+        // every art is `.icon`, the `.picture` branch is never built here.
+        return (content, base)
     }
 
     private static func nativeIcon(for id: ItemID, extras: [ExtraItemSpec]) -> NSImage {
@@ -1609,8 +1601,7 @@ final class PanelPresenter: RevealPresenter {
         PelmetLog.log("panel: drag opened Always Hidden")
         foldOpen = true
         foldMotion = Self.foldStyle(appState.settings.revealAnimation)
-        let shown = refresh()
-        picturePassUnlessBarDrag(shown.missing)
+        refresh()
     }
 
     private func cancelDrag() {
@@ -1775,17 +1766,6 @@ final class PanelPresenter: RevealPresenter {
         barDragging && NSEvent.pressedMouseButtons & 1 != 0
     }
 
-    /// The picture pass reveals the real bar under a cover: never under a
-    /// ⌘-drag MenuBarAgent is running there (a ⌘-drag's open, a fold it
-    /// springs). The next open takes the pictures.
-    private func picturePassUnlessBarDrag(_ missing: [ItemID]) {
-        guard !barDragInFlight else {
-            if !missing.isEmpty { PelmetLog.log("panel: picture pass deferred — a bar ⌘-drag is in flight, \(missing.count) without a fresh picture") }
-            return
-        }
-        picturePassIfNeeded(missing)
-    }
-
     /// A ⌘-drag from the bar can now end on the panel: a copy of the icon
     /// rides under the pointer while it is over it, where the tap keeps the
     /// real one in its slot (`BarDragRedirect`).
@@ -1829,11 +1809,6 @@ final class PanelPresenter: RevealPresenter {
 
     // MARK: - Columns
 
-    /// Columns from the pointer, `distance` left of the panel's right edge:
-    /// that edge stays put, so each tile's width left of it is one more
-    /// column. Two at least, no more than the widest section of `model` can
-    /// fill, ten at most. Stored for the current names mode, and saved once
-    /// the drag is let go (`ended`); returned for the tip.
     /// The panel's look, from its right-click menu.
     private func setStyle(_ style: PanelOptions.Style) {
         guard let appState, appState.settings.panel.style != style else { return }
@@ -1842,6 +1817,11 @@ final class PanelPresenter: RevealPresenter {
         if isOpen { refresh() }
     }
 
+    /// Columns from the pointer, `distance` left of the panel's right edge:
+    /// that edge stays put, so each tile's width left of it is one more
+    /// column. Two at least, no more than the widest section of `model` can
+    /// fill, ten at most. Stored for the current names mode, and saved once
+    /// the drag is let go (`ended`); returned for the tip.
     @discardableResult
     func setColumns(distance: CGFloat, model: PanelModel?, ended: Bool) -> Int {
         guard let appState else { return 0 }
@@ -2121,8 +2101,7 @@ final class PanelPresenter: RevealPresenter {
         }
         foldOpen = flipFold(shown: shown)
         if let appState { foldMotion = Self.foldStyle(appState.settings.revealAnimation) }
-        let drawn = refresh()
-        picturePassIfNeeded(drawn.missing)
+        refresh()
     }
 
     // MARK: - Dev
@@ -2156,17 +2135,11 @@ final class PanelPresenter: RevealPresenter {
 
     // MARK: - Pictures
 
-    /// A relay's fresh picture of the item it pressed, taken once its menu
-    /// is gone (ItemPress): whatever the press changed shows next open.
+    /// ItemPress still calls this after a press. Tiles are the apps' own
+    /// icons now, so there is no picture to retake or keep: nothing to do.
+    /// (The call in ItemPress can go; it is left for the next sync.)
     func repicture(_ key: ItemID, frame: CGRect) async {
-        guard let appState, let picture = await appState.transitions.pictureItem(key, frame: frame) else {
-            PelmetLog.log("panel: \(key.rawValue) not re-pictured")
-            return
-        }
-        pictures.store([key: picture])
         unpicturable[key] = nil
-        PelmetLog.log("panel: \(key.rawValue) re-pictured")
-        if isOpen { refresh() }
     }
 
     /// A concealed icon is in no tree the bar walks, so an app that switched
@@ -2285,14 +2258,12 @@ final class PanelPresenter: RevealPresenter {
         }
     }
 
-    /// The pass, once, when the open panel (or the Settings preview) shows
-    /// tiles with no picture. `done` runs once pictures were stored.
-    func picturePassIfNeeded(_ missing: [ItemID], done: (@MainActor () -> Void)? = nil) {
+    /// The detection pass, once: reveals the section(s) under a cover and
+    /// walks the bar to see which of `missing` have an icon there. Its
+    /// pictures are not kept (tiles draw the apps' own icons).
+    func picturePassIfNeeded(_ missing: [ItemID]) {
         guard let appState, appState.screenRecordingGranted else { return }
-        if passTask != nil {
-            if let done { passWaiters.append(done) }
-            return
-        }
+        if passTask != nil { return }
         var wanted = missing.filter { key in
             unpicturable[key].map { -$0.timeIntervalSinceNow >= ItemPictures.maxAge } ?? true
         }
@@ -2306,7 +2277,6 @@ final class PanelPresenter: RevealPresenter {
             askedThisOpen.formUnion(wanted)
         }
         guard !wanted.isEmpty else { return }
-        if let done { passWaiters.append(done) }
         let roster = appState.settings.sectionModel.roster
         let needsAlways = wanted.contains { roster.section(of: $0) == .alwaysHidden }
         let reveal: Set<PelmetCore.Section> = needsAlways ? [.hidden, .alwaysHidden] : [.hidden]
@@ -2323,9 +2293,6 @@ final class PanelPresenter: RevealPresenter {
             }
             guard let self else { return }
             self.passTask = nil
-            let waiters = self.passWaiters
-            self.passWaiters = []
-            defer { for waiter in waiters { waiter() } }
             // A pass that never saw the icons (the bar out, an idle Mac's
             // empty walk) says nothing about them: the next open tries again.
             guard let found else {
@@ -2333,7 +2300,6 @@ final class PanelPresenter: RevealPresenter {
                 for key in wanted { self.extrasSaid[key] = nil }
                 return
             }
-            self.pictures.store(found.pictures)
             self.settleNoIcon(wanted: wanted, absent: found.absent)
             // An extras bar the pass proved wrong is not asked again.
             for key in wanted {
@@ -2353,9 +2319,7 @@ final class PanelPresenter: RevealPresenter {
             let again = max(0, lost.count - found.failed.count)
             PelmetLog.log("panel: pass pictured \(found.pictures.count) of \(wanted.count) wanted\(lost.isEmpty ? "" : " — none for \(lost)")\(again > 0 ? ", \(again) asked again next open" : "")")
             guard self.isOpen else { return }
-            // A widen or an unfold while it ran can want more.
-            let shown = self.refresh()
-            self.picturePassIfNeeded(shown.missing)
+            self.refresh()
         }
     }
 }
@@ -2367,7 +2331,7 @@ final class PanelPresenter: RevealPresenter {
 /// frame grows to a taller panel and centres it all the same.
 struct PanelHost: View {
     /// The hosting view's own space: what the drag measures the panel in.
-    static let space = "panelHost"
+    nonisolated static let space = "panelHost"
 
     let panel: PanelView
 

@@ -26,30 +26,6 @@ public enum BarAdoption {
         public let log: [String]
     }
 
-    /// Reconcile the observed bar against the model. `items` is every
-    /// observed item with its frame's minX (nil when concealed/unmeasured),
-    /// in snapshot order. Without a measurable chevron (the user can hide
-    /// Pelmet's status item entirely) the clusters themselves are the only
-    /// boundary: an item measured at/right of the visible cluster's left edge
-    /// reads visible, one at/left of the concealable clusters' right edge
-    /// reads into the hidden side, and the gap between them is ambiguous —
-    /// the model's word stands. Cluster edges are computed from the (stale,
-    /// mid-drag) model, so the dragged item itself poisons every OTHER item's
-    /// reading — chevron-less zone adoption therefore applies ONLY to
-    /// `draggedID` (the item the band monitor saw ⌘-dragged, whose
-    /// self-excluded pools are clean); everyone else still gets confident
-    /// readings folded into the zone baseline. The within-section order
-    /// fold-in needs only live frames and always runs.
-    ///
-    /// Anything sitting LEFT of the chevron (smaller AX x) is adopted into
-    /// Hidden; right of it back to Visible. Always-Hidden has no physical
-    /// marker of its own; its live cluster IS the boundary — an item dropped
-    /// among/left of always-hidden members (only visible during a full
-    /// reveal) adopts in, one dropped among the hidden cluster adopts out.
-    /// Reflows shift every frame but never an item's relative position — only
-    /// a real user drag does. That makes zone-CHANGE the safe adoption
-    /// trigger: a settings-assigned item still sitting in its old zone is
-    /// never "corrected" back.
     /// `order` with its on-bar members re-sorted into `bar`'s order, in the
     /// slots they already hold. Members the bar has no frame for stay put.
     /// Pelmet's Siri leaves the layout while Hidden is concealed, so it is
@@ -139,6 +115,30 @@ public enum BarAdoption {
         return minX.sorted { $0.value < $1.value }.map(\.key)
     }
 
+    /// Reconcile the observed bar against the model. `items` is every
+    /// observed item with its frame's minX (nil when concealed/unmeasured),
+    /// in snapshot order. Without a measurable chevron (the user can hide
+    /// Pelmet's status item entirely) the clusters themselves are the only
+    /// boundary: an item measured at/right of the visible cluster's left edge
+    /// reads visible, one at/left of the concealable clusters' right edge
+    /// reads into the hidden side, and the gap between them is ambiguous —
+    /// the model's word stands. Cluster edges are computed from the (stale,
+    /// mid-drag) model, so the dragged item itself poisons every OTHER item's
+    /// reading — chevron-less zone adoption therefore applies ONLY to
+    /// `draggedID` (the item the band monitor saw ⌘-dragged, whose
+    /// self-excluded pools are clean); everyone else still gets confident
+    /// readings folded into the zone baseline. The within-section order
+    /// fold-in needs only live frames and always runs.
+    ///
+    /// Anything sitting LEFT of the chevron (smaller AX x) is adopted into
+    /// Hidden; right of it back to Visible. Always-Hidden has no physical
+    /// marker of its own; its live cluster IS the boundary — an item dropped
+    /// among/left of always-hidden members (only visible during a full
+    /// reveal) adopts in, one dropped among the hidden cluster adopts out.
+    /// Reflows shift every frame but never an item's relative position — only
+    /// a real user drag does. That makes zone-CHANGE the safe adoption
+    /// trigger: a settings-assigned item still sitting in its old zone is
+    /// never "corrected" back.
     public static func reconcile(
         items: [(id: ItemID, minX: CGFloat?)],
         model startModel: SectionModel,

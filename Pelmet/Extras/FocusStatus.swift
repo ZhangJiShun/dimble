@@ -27,6 +27,9 @@ final class FocusStatus {
     /// Transitions the stream has applied; the boot read yields to them.
     private var streamed = 0
     private var restarts = 0
+    /// When the stream last ended, until the replay on the way back has
+    /// covered it: that replay reads only the gap, not hours of log again.
+    private var gapStart: Date?
     /// Pelmet quitting takes the child with it — a `Process` outlives its
     /// parent, and a `log stream` left behind at every relaunch was found
     /// re-parented to launchd (2026-09-16).
@@ -39,15 +42,30 @@ final class FocusStatus {
     nonisolated private static let predicate =
         #"process == "donotdisturbd" AND ((category == "ServiceProvider" AND eventMessage BEGINSWITH "Did receive state update") OR (category == "StateProvider" AND eventMessage BEGINSWITH "Calculate DND state for snapshot"))"#
 
+    /// A stream that stayed up this long counts as healthy: the next end
+    /// starts the backoff over (shared by the other `log stream` watchers).
+    nonisolated static let stableRun: TimeInterval = 60
+
+    /// `log`'s ndjson timestamps ("2026-10-27 08:16:19.694652-0400"). One
+    /// shared formatter: `DateFormatter.date(from:)` is thread-safe, and a
+    /// new one per log line is costly.
+    nonisolated static let logTimestamps: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZ"
+        return formatter
+    }()
+
     func start() {
         stopped = false
+        gapStart = nil
         reapOrphans()
         if termination == nil {
             termination = NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification, object: nil, queue: .main
             ) { [weak self] _ in MainActor.assumeIsolated { self?.stop() } }
         }
-        recover()
+        recover(since: nil)
         openStream()
     }
 
@@ -56,6 +74,8 @@ final class FocusStatus {
         (stream?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
         stream?.terminate()
         stream = nil
+        if let termination { NotificationCenter.default.removeObserver(termination) }
+        termination = nil
     }
 
     /// A crash (or a quit before the observer existed) can still strand a
@@ -77,12 +97,15 @@ final class FocusStatus {
     /// reads as off — Focus is off far more often than not — unless a
     /// snapshot in it still holds an assertion: a Focus on for days (the
     /// reboot in #70 logged snapshots only) is named a week back.
-    private func recover() {
+    /// With `since` (a stream that ended and is being reopened) only the
+    /// gap is read, and a gap with no transition leaves the mode as it was.
+    private func recover(since: Date?) {
         let seen = streamed
+        let windows = since.map { ["\(min(7 * 24 * 60 * 60, Int(Date().timeIntervalSince($0)) + 5))s"] } ?? ["1h", "24h", "7d"]
         Task.detached(priority: .utility) { [weak self] in
             var found: String?
             var held = false
-            for window in ["1h", "24h", "7d"] where found == nil {
+            for window in windows where found == nil {
                 if window == "7d", !held { break }
                 let messages = Self.run(["show", "--last", window, "--style", "ndjson", "--predicate", Self.predicate])
                     .compactMap(Self.message(in:))
@@ -94,7 +117,8 @@ final class FocusStatus {
                 guard let self, !self.stopped else { return }
                 // A transition the stream caught while `log show` ran is newer.
                 guard self.streamed == seen else { return }
-                PelmetLog.log("focus: boot \(mode.map { "\($0.name) (\($0.symbol))" } ?? "off")\(found == nil ? ", no transition on record" : "")")
+                if since != nil, found == nil { return }
+                PelmetLog.log("focus: \(since == nil ? "boot" : "replayed the gap") \(mode.map { "\($0.name) (\($0.symbol))" } ?? "off")\(found == nil ? ", no transition on record" : "")")
                 self.active = mode
             }
         }
@@ -110,6 +134,7 @@ final class FocusStatus {
         process.standardOutput = pipe
         let errors = Pipe()
         process.standardError = errors
+        let startedAt = Date()
         let lines = LineSplitter()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
@@ -131,28 +156,43 @@ final class FocusStatus {
             // Why `log` quit, when it says (it has a "Must be admin" refusal).
             let why = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
                 .split(separator: "\n").first.map(String.init) ?? ""
-            Task { @MainActor [weak self] in self?.streamEnded(why) }
+            let ranFor = Date().timeIntervalSince(startedAt)
+            Task { @MainActor [weak self] in self?.streamEnded(why, ranFor: ranFor) }
         }
         do {
             try process.run()
             stream = process
         } catch {
+            // Retried like a stream that ended.
             PelmetLog.log("focus: log stream failed — \(error.localizedDescription)")
+            streamEnded("could not start (\(error.localizedDescription))", ranFor: 0)
         }
     }
 
     /// logd restarts (or a kill) end the child; come back with a backoff so
     /// a machine where `log stream` is refused doesn't spin.
-    private func streamEnded(_ why: String) {
+    private func streamEnded(_ why: String, ranFor: TimeInterval) {
         stream = nil
         guard !stopped else { return }
+        // A standard account: `log stream` is refused, and will be every
+        // time. Said once, not retried.
+        if why.contains("Must be admin") {
+            PelmetLog.log("focus: log stream refused (\(why.prefix(120))) — not trying again")
+            return
+        }
+        // Where the replay on the way back starts: the first end of a run
+        // of failures, until a stream is running again.
+        if gapStart == nil { gapStart = Date() }
+        if ranFor >= Self.stableRun { restarts = 0 }
         restarts += 1
         let delay = min(60, 2 << min(restarts, 5))
         PelmetLog.log("focus: log stream ended\(why.isEmpty ? "" : " (\(why.prefix(120)))"), retry in \(delay)s")
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self, !self.stopped, self.stream == nil else { return }
-            self.recover()
+            let since = self.gapStart
+            self.gapStart = nil
+            self.recover(since: since)
             self.openStream()
         }
     }

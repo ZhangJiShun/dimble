@@ -60,9 +60,11 @@ public struct EngineSnapshot: Equatable, Sendable {
     }
 
     /// Equality ignoring `takenAt` — for observers that only care whether the
-    /// bar's content changed, not when it was last walked.
+    /// bar's content changed, not when it was last walked. `shownAlone` counts
+    /// as content; `itemsAtRest` does not (a rest walk after a non-rest one
+    /// is announced by `.mirrorAtRest`, and the app handles it on its own).
     public func contentEquals(_ other: EngineSnapshot) -> Bool {
-        items == other.items && concealed == other.concealed
+        items == other.items && concealed == other.concealed && shownAlone == other.shownAlone
     }
 }
 
@@ -78,26 +80,18 @@ public enum EngineEvent: Equatable, Sendable {
     case mirrorAtRest
     /// Our hide assertion was torn down externally (DND/assessment churn).
     case assertionTornDown
-    /// MenuBarClientCore availability flipped (e.g. after an OS update).
+    /// MenuBarClientCore is unavailable on this OS build. Sent once, with
+    /// `false`: the private API is resolved once per process and never comes back.
     case availabilityChanged(Bool)
     /// A converge attempt failed after bounded retries; surface to the user.
     case convergeFailed(String)
 }
 
-public enum HideGranularity: Sendable {
-    case bundleID
-    case item
-}
-
 public struct EngineCapabilities: Sendable {
     public let canHide: Bool
-    public let hideGranularity: HideGranularity
-    public let canReorder: Bool
 
-    public init(canHide: Bool, hideGranularity: HideGranularity, canReorder: Bool) {
+    public init(canHide: Bool) {
         self.canHide = canHide
-        self.hideGranularity = hideGranularity
-        self.canReorder = canReorder
     }
 }
 

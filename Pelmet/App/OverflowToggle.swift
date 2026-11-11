@@ -167,8 +167,8 @@ enum OverflowToggle {
     }
 
     /// Click until the toggle reads `expanded` (two tries: the collapse
-    /// click missed once in three probe runs). Returns the toggle when the
-    /// state was reached, nil when there is no « or it would not flip.
+    /// click missed once in three probe runs). Returns true when the
+    /// state was reached, false when there is no « or it would not flip.
     private static func set(expanded: Bool, _ toggle: Toggle) async -> Bool {
         // Live state, never the one captured at find(): the collapse after
         // the first live pass compared against "collapsed" and returned

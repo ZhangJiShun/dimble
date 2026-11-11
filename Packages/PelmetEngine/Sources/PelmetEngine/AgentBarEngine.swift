@@ -42,10 +42,11 @@ public struct ConvergeTiming: Sendable {
 
 public actor AgentBarEngine: MenuBarEngine {
     public nonisolated let capabilities = EngineCapabilities(
-        canHide: AssessmentMode.isAvailable,
-        hideGranularity: .bundleID,
-        canReorder: true
+        canHide: AssessmentMode.isAvailable
     )
+
+    /// `.availabilityChanged(false)` goes out once (see `converge`).
+    private var reportedUnavailable = false
 
     public nonisolated var events: AsyncStream<EngineEvent> { eventStream }
     private nonisolated let eventStream: AsyncStream<EngineEvent>
@@ -393,6 +394,12 @@ public actor AgentBarEngine: MenuBarEngine {
         return last
     }
 
+    /// Whether a hide assertion is held right now. Callers use it to decide
+    /// if an adoption window will actually drop anything worth covering —
+    /// with none held `openAdoptionWindow` returns straight away and the
+    /// bar never changes.
+    public var holdsAssertion: Bool { assertion != nil }
+
     /// Fresh registrations under ANY active assertion park offscreen and
     /// never enter the agent's AX tree (verified at boot — it's why start()
     /// waits for own-item adoption; re-verified live 2026-08-31: a relaunched
@@ -408,12 +415,6 @@ public actor AgentBarEngine: MenuBarEngine {
     /// several items under one bundle, so "any item of this bundle" is
     /// satisfied by a sibling that was adopted long ago and the window
     /// closes before the new registration lands (parked for the session).
-    /// Whether a hide assertion is held right now. Callers use it to decide
-    /// if an adoption window will actually drop anything worth covering —
-    /// with none held `openAdoptionWindow` returns straight away and the
-    /// bar never changes.
-    public var holdsAssertion: Bool { assertion != nil }
-
     public func openAdoptionWindow(for bundleID: String, expecting item: ItemID? = nil) async -> Bool {
         guard assertion != nil else { return true }
         PelmetLog.log("adoptWindow: dropping assertion for \(item?.rawValue ?? bundleID)")
@@ -559,7 +560,12 @@ public actor AgentBarEngine: MenuBarEngine {
         guard AssessmentMode.isAvailable else {
             timing.outcome = .unavailable
             if assertion != nil { invalidateAssertion() }
-            eventContinuation.yield(.availabilityChanged(false))
+            // The shim resolves the private API once per process, so this
+            // never turns true again: say it once, not on every converge.
+            if !reportedUnavailable {
+                reportedUnavailable = true
+                eventContinuation.yield(.availabilityChanged(false))
+            }
             return
         }
 
@@ -1021,11 +1027,6 @@ public actor AgentBarEngine: MenuBarEngine {
         await converge()
     }
 
-    /// Visibility oracle for the blink cover: a fresh AX walk (the cached
-    /// snapshot is up to 0.5s old) — true while any item of a bundle the
-    /// live assertion conceals is still in the agent's tree. The bundle set,
-    /// not the snapshot's stamped ids: a converge that lost its epoch to a
-    /// hover reveal leaves the stamp stale (2026-09-14).
     /// A fresh AX walk, bypassing the snapshot cache.
     public func freshSnapshot() async -> EngineSnapshot {
         await refreshSnapshot()
@@ -1038,6 +1039,11 @@ public actor AgentBarEngine: MenuBarEngine {
         await enumerator.barCopies()
     }
 
+    /// Visibility oracle for the blink cover: a fresh AX walk (the cached
+    /// snapshot is up to 0.5s old) — true while any item of a bundle the
+    /// live assertion conceals is still in the agent's tree. The bundle set,
+    /// not the snapshot's stamped ids: a converge that lost its epoch to a
+    /// hover reveal leaves the stamp stale (2026-09-14).
     public func concealedItemsStillVisible() async -> Bool {
         guard let concealable = activeConcealable, !concealable.isEmpty else { return false }
         let snap = await refreshSnapshot()

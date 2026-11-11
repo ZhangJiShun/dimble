@@ -395,14 +395,22 @@ final class AppState {
         SparkleController.shared.notifyOnUpdates = { [weak self] in self?.settings.notifyOnUpdates ?? true }
         SparkleController.shared.openUpdateHub = { [weak self] in self?.openSettings(tab: .about) }
         SparkleController.shared.betaUpdates = { [weak self] in self?.settings.betaUpdates ?? false }
-        SparkleController.shared.onStatusChange = { [weak self] status in
-            if case .available = status {
-                self?.statusItem?.showUpdateDot(true)
-            } else {
-                self?.statusItem?.showUpdateDot(false)
-            }
-        }
+        SparkleController.shared.onStatusChange = { [weak self] _ in self?.refreshUpdateDot() }
         SparkleController.shared.start()
+        // Fork: Sparkle is off (no key), so upstream releases are only
+        // announced — see UpstreamWatch.
+        UpstreamWatch.shared.onChange = { [weak self] in self?.refreshUpdateDot() }
+        UpstreamWatch.shared.start()
+    }
+
+    /// The chevron's dot: an installable update, or (fork) a newer upstream
+    /// release not yet seen in About.
+    func refreshUpdateDot() {
+        statusItem?.showUpdateDot(Self.wantsUpdateDot)
+    }
+
+    static var wantsUpdateDot: Bool {
+        SparkleController.shared.availableVersion != nil || UpstreamWatch.shared.wantsDot
     }
 
     /// First run gets the intro. A finished install that lost its grant
@@ -760,20 +768,6 @@ final class AppState {
         return adopted
     }
 
-    func reopenAdoption(for bundle: String) async {
-        if await coveringAdoption({ await engine.openAdoptionWindow(for: bundle) }) {
-            absentBundles.remove(bundle)
-            updateSnapshot(await engine.snapshot())
-        } else {
-            // Running, assigned, and still no registration with the
-            // assertion dropped: the app has no bar icon right now (its
-            // "show in menu bar" is off — the launcher flow's last step).
-            // The editor's no-flash guard must not keep a ghost tile for it.
-            absentBundles.insert(bundle)
-            PelmetLog.log("editor: \(bundle) has no menu bar item — off the board")
-        }
-    }
-
     static func relaunchAdoptionKeys(for bundle: String, model: SectionModel) -> [ItemID] {
         // A system host may restart before any registration pass has folded
         // it into knownBundles (the input menu switched on, then its agent
@@ -789,9 +783,6 @@ final class AppState {
         }
     }
 
-    /// Bundles that are running but proven icon-less (an adoption window
-    /// found no registration). Cleared the moment an item of theirs shows.
-    private var absentBundles: Set<String> = []
     /// When each canonical identity was last live or concealed. The editor
     /// keeps a stored item's stand-in tile through a snapshot gap only while
     /// this is fresh; a host with no registration never gets one.
@@ -1024,7 +1015,8 @@ final class AppState {
     }
 
     private func bootEngine() {
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             // The agent DEFERS adopting newly registered status items while
             // an assessment assertion is active (verified live 2026-08-21: a
             // fresh item parks offscreen until no assertion holds, then lands
@@ -1712,13 +1704,6 @@ final class AppState {
     /// Live mode put Hidden out or back under its covers, with no reveal.
     func chevronFaceChanged() { statusItem?.updateSymbol(revealed: isRevealedOrRevealing) }
 
-    /// Bounded poll until the engine reports swap-quiet for `interval` — the
-    /// agent animates each swap, so quiet means the bar has stopped moving.
-    /// Uncovered reveal: put the sections' own items (launchers, separators)
-    /// into the layout before the swap, invisible, and give the agent a beat
-    /// to place them — so its slide-in animates the third-party icons into
-    /// slots around them instead of shifting everything once more when they
-    /// settle later (see `StatusItemFader.attach`).
     /// Apply pass: idle extras join the layout invisibly so they can be
     /// dragged (ExtrasManager.attachForApply). Returns what joined.
     func attachIdleExtrasForApply() -> [ItemID] {
@@ -1727,6 +1712,11 @@ final class AppState {
     }
     func detachIdleExtrasAfterApply() { extras?.detachAfterApply() }
 
+    /// Uncovered reveal: put the sections' own items (launchers, separators)
+    /// into the layout before the swap, invisible, and give the agent a beat
+    /// to place them — so its slide-in animates the third-party icons into
+    /// slots around them instead of shifting everything once more when they
+    /// settle later (see `StatusItemFader.attach`).
     func preattachOwnItems(revealing sections: Set<PelmetCore.Section>) async {
         let model = settings.sectionModel
         var attached = extras?.preattach(model: model, revealing: sections) ?? []
@@ -1736,6 +1726,8 @@ final class AppState {
         PelmetLog.log("preattach: \(attached.count) own item(s) in layout ahead of the swap")
     }
 
+    /// Bounded poll until the engine reports swap-quiet for `interval` — the
+    /// agent animates each swap, so quiet means the bar has stopped moving.
     func waitUntilQuiesced(
         interval: TimeInterval, deadline: TimeInterval, poll: Duration
     ) async {
@@ -1828,13 +1820,6 @@ final class AppState {
         settings.clockClickOpensNotificationCenter ? settings.notificationCenterHotkey : nil
     }
 
-    /// Persist + apply a changed settings store. Cheap, latency-sensitive
-    /// bits apply immediately; the save and the engine converge are debounced
-    /// — slider drags call this per tick, and each un-debounced tick paid a
-    /// JSON save plus a full AX-walking converge that concluded "no-op".
-    /// Clock blink (see ClockClickRelay): cover the strip, drop the
-    /// assertion, replay the swallowed click, re-acquire, lift the cover once
-    /// the bar is quiet beneath it. With nothing held the click just replays.
     /// The Notification Center shortcut (#44): the OS one is refused while
     /// the assertion holds, whatever presses it. Runs the clock relay's
     /// dot-zone path — AX press on the clock, the pointer never moves —
@@ -1881,6 +1866,9 @@ final class AppState {
     /// panel (#52, #53: covers stacked six deep under a held shortcut).
     private var clockBlinkInFlight = false
 
+    /// Clock blink (see ClockClickRelay): cover the strip, drop the
+    /// assertion, replay the swallowed click, re-acquire, lift the cover once
+    /// the bar is quiet beneath it. With nothing held the click just replays.
     private func clockClicked(at point: CGPoint, pointer: CGPoint, option: Bool = false, viaShortcut: Bool = false) {
         Task { @MainActor in
             // Press the clock through AX so the pointer never moves; the
@@ -1898,12 +1886,12 @@ final class AppState {
             // the clock itself.
             // A ⌥-click goes out with its ⌥ (#92).
             let flags: CGEventFlags = option ? .maskAlternate : []
-            let replayClick = { [clockRelay] (closing: Bool) in
+            let replayClick = { @MainActor [clockRelay] (closing: Bool) async in
                 let live = CGEvent(source: nil)?.location
                 if let live, clockRelay?.isOnClock(live, dotZoneIncluded: closing) == true {
-                    ClockClickRelay.postClick(at: live, pointer: live, flags: flags)
+                    await ClockClickRelay.postClick(at: live, pointer: live, flags: flags)
                 } else {
-                    ClockClickRelay.postClick(at: point, pointer: live ?? pointer, flags: flags)
+                    await ClockClickRelay.postClick(at: point, pointer: live ?? pointer, flags: flags)
                 }
             }
             // No clock under the target and another bar item under the
@@ -1915,7 +1903,7 @@ final class AppState {
             if clockElement == nil, !viaShortcut, let other = ClockClickRelay.otherBarItem(at: pointer) {
                 await ClockClickRelay.waitForButtonRelease()
                 let live = CGEvent(source: nil)?.location ?? pointer
-                ClockClickRelay.postClick(at: pointer, pointer: live, flags: flags)
+                await ClockClickRelay.postClick(at: pointer, pointer: live, flags: flags)
                 PelmetLog.log("clock: click landed on \(other), not the clock — replayed as is, no blink")
                 return
             }
@@ -1928,7 +1916,7 @@ final class AppState {
             // does a ⌥-click, the clock's own action whatever the panel does.
             if panelWasOpen, !option {
                 await ClockClickRelay.waitForButtonRelease()
-                replayClick(true)
+                await replayClick(true)
                 panelOpenedAt = .distantPast
                 PelmetLog.log("clock: panel open — click replayed, no blink")
                 // The bare bar is back once the panel has left (and its
@@ -1972,7 +1960,6 @@ final class AppState {
             let panelStarting = { [transitions] in
                 guard let cover else { return }
                 Task { @MainActor in
-                    try? await Task.sleep(for: AppTiming.panelSlideIn)
                     transitions.swapBlinkCoverUnderPanel(cover)
                 }
             }
@@ -1986,7 +1973,7 @@ final class AppState {
                 // carries no modifiers) and no panel to wait for.
                 await ClockClickRelay.waitForButtonRelease()
                 try? await Task.sleep(for: AppTiming.clockPressSettle)
-                replayClick(false)
+                await replayClick(false)
                 PelmetLog.log("clock: ⌥-click replayed\(blinked ? " with the assertion down" : "")")
             } else if ClockClickRelay.pressNeverOpensPanel {
                 // This macOS never keeps the panel open on a press: replay
@@ -1995,7 +1982,7 @@ final class AppState {
                 // shortcut clicks the clock too and puts the pointer back,
                 // a one-frame jump over a dead ⌥⌘N (Gab, 2026-10-07).
                 await ClockClickRelay.waitForButtonRelease()
-                replayClick(false)
+                await replayClick(false)
                 panelStarting()
                 PelmetLog.log("clock: click replayed — the press does not open the panel on this macOS")
             } else if let clockElement {
@@ -2068,12 +2055,12 @@ final class AppState {
                         blinked = await engine.beginClockBlink() || blinked
                     }
                     if cleanMisses > 0 { ClockClickRelay.notePressNeverOpensPanel() }
-                    replayClick(false); panelStarting()
+                    await replayClick(false); panelStarting()
                 }
                 if opened { pressOpenedAt = pressedAt }
             } else {
                 PelmetLog.log("clock: no clock element under the target, replaying the click")
-                replayClick(false)
+                await replayClick(false)
                 panelStarting()
             }
             guard blinked else { cover?.dismiss(); return }
@@ -2352,6 +2339,10 @@ final class AppState {
         settingsChanged()
     }
 
+    /// Persist + apply a changed settings store. Cheap, latency-sensitive
+    /// bits apply immediately; the save and the engine converge are debounced
+    /// — slider drags call this per tick, and each un-debounced tick paid a
+    /// JSON save plus a full AX-walking converge that concluded "no-op".
     func settingsChanged() {
         rehide.policy = settings.rehidePolicy
         if settings.showStatusItem, statusItem == nil {
@@ -2493,8 +2484,6 @@ final class AppState {
 
     // MARK: - Layout editor intents
 
-    /// Move an item to `section`, inserted before `beforeID` (nil = append).
-    /// Updates assignment + drawn order; the bar moves at Apply.
     /// Bundles with an icon on the editor board (live or concealed) that
     /// Pelmet can actually manage — a launcher would be a duplicate. Icons
     /// marked incompatible are NOT here: those are exactly what launchers
@@ -2515,12 +2504,6 @@ final class AppState {
                 return bundle
             }
         )
-    }
-
-    /// A third-party item whose app the user gave a launcher.
-    func hasAppLauncher(for id: ItemID) -> Bool {
-        guard let bundle = id.bundleID, !PelmetBundle.ownIDs.contains(bundle) else { return false }
-        return settings.extraItems.contains { $0.kind == .appLauncher && $0.bundleID == bundle }
     }
 
     /// Adds a Pelmet launcher for an app, one per bundle. `section` pre-assigns
@@ -2805,6 +2788,8 @@ final class AppState {
             .min { $0.distance < $1.distance }?.id
     }
 
+    /// Move an item to `section`, inserted before `beforeID` (nil = append).
+    /// Updates assignment + drawn order; the bar moves at Apply.
     func moveItem(_ id: ItemID, to section: PelmetCore.Section, before beforeID: ItemID?) {
         // A drop that lands while a pass runs would be cleared with the
         // pass's own edits on success; the editor is inert meanwhile, this
@@ -3101,6 +3086,21 @@ final class AppState {
         // Logged on change only (the button reads this every render): which
         // move pads the count when the drop read "Apply (2)" (2026-09-21).
         // The floor (`ApplyCount`: a drop the plan can't see yet) is the rest.
+        // The line is long to build and this runs every render, so a cheap
+        // hash of what it prints decides whether to build it at all. A
+        // concealed icon adds snapshot detail the hash omits: that case
+        // always builds.
+        var hasher = Hasher()
+        for move in moves {
+            hasher.combine(move.item.rawValue)
+            hasher.combine(move.after?.rawValue)
+            hasher.combine(move.before?.rawValue)
+        }
+        hasher.combine(count.total)
+        for key in count.trapped.map(\.rawValue).sorted() { hasher.combine(key) }
+        let signature = hasher.finalize()
+        if signature == lastPendingSignature, count.concealed.isEmpty { return count.total }
+        lastPendingSignature = signature
         let floor = count.total - moves.count - count.trapped.count - count.concealed.count
         let line = "\(moves.count) move(s) + \(count.trapped.count) trapped + \(count.concealed.count) concealed"
             + (floor > 0 ? " + \(floor) floor" : "") + " = \(count.total) — "
@@ -3123,6 +3123,7 @@ final class AppState {
         return count.total
     }
     private var lastPendingLine = ""
+    private var lastPendingSignature = 0
 
     /// The number on the Apply button: `pendingMoveCount` through
     /// `ApplyCountHold`. The raw count is read off asynchronous snapshots and
@@ -3439,10 +3440,6 @@ final class AppState {
     /// icons alone from behind the « under the cover.
     var barInFlux: Bool { barMovingReason != nil }
 
-    /// An item menu relay is clicking: its clicks on an icon behind an open «
-    /// hit-test as empty bar.
-    var pressRunning: Bool { press.isRunning }
-
     /// When the bar has finished attaching at launch: `bootOwnItemLead`
     /// after the own items were adopted (the chevron lands on its neighbours
     /// meanwhile). nil until they are.
@@ -3745,7 +3742,7 @@ final class AppState {
             separators: settings.separators,
             model: settings.sectionModel,
             pelmetBundleID: PelmetBundle.mainID,
-            isRunning: { app($0) != nil && !absentBundles.contains($0) },
+            isRunning: { app($0) != nil },
             appName: { app($0)?.localizedName },
             recentlySeen: { Date.now.timeIntervalSince(lastSeenAt[$0.sectionKey] ?? .distantPast) < Self.storedTileGrace },
             destroyed: destroyedKeys,
@@ -4081,14 +4078,6 @@ final class AppState {
         rehideTimer?.tolerance = 0.1
     }
 
-    /// Menubar-positional sections: Pelmet's own chevron is the visible/hidden
-    /// boundary. Anything sitting LEFT of it (smaller AX x) is adopted into
-    /// Hidden; right of it back to Visible. Uses live AX frames — NOT the
-    /// agent's positions plist, which lists new items only lazily (M1 finding).
-    /// Always-Hidden has no physical marker of its own; its live cluster IS
-    /// the boundary — an item dropped among/left of always-hidden members
-    /// (only visible during a full reveal) adopts in, one dropped among the
-    /// hidden cluster adopts out.
     /// One adoption chain at a time — a burst of drag ends otherwise
     /// spawns N concurrent retry chains, each pulling its own snapshot.
     private var adoptionInFlight = false
@@ -4112,6 +4101,15 @@ final class AppState {
     /// supervisor stays out of the way while that adoption lands.
     private(set) var lastUserDragEndedAt: Date?
 
+    /// Menubar-positional sections: Pelmet's own chevron is the visible/hidden
+    /// boundary. Anything sitting LEFT of it (smaller AX x) is adopted into
+    /// Hidden; right of it back to Visible. Uses live AX frames — NOT the
+    /// agent's positions plist, which lists new items only lazily (M1 finding).
+    /// Always-Hidden has no physical marker of its own; its live cluster IS
+    /// the boundary — an item dropped among/left of always-hidden members
+    /// (only visible during a full reveal) adopts in, one dropped among the
+    /// hidden cluster adopts out.
+    ///
     /// `dropDisplay`: the bounds (CG global) of the display a drop landed
     /// on when it is not the main one. The pass reads that display's bar
     /// (`BarAdoption.dropBar`).
@@ -4224,11 +4222,6 @@ final class AppState {
     /// 2026-09-20 16:56).
     var syntheticDragInFlight: Bool { applying }
 
-    /// The one write path for the engine snapshot mirror (Apply and
-    /// engine-event handling route through here). Content-gated: every
-    /// assignment fires @Observable invalidation (re-running the editor
-    /// pipeline while settings is open), and most snapshots differ only by
-    /// `takenAt`.
     private var lastBundlelessIDs: [String] = []
     private var unhideableTracker = UnhideableTracker()
     /// Canonical keys of icons the bar kept showing after Pelmet concealed
@@ -4338,7 +4331,7 @@ final class AppState {
     }
 
     /// Items the native « holds on the primary band, from the latest
-    /// snapshot (`PlacementGeometry.overflowTrappedCount`). Information for
+    /// snapshot (`noteOverflow` reads it). Information for
     /// the editor's note only: Apply reports them as skipped.
     private(set) var overflowTrappedCount = 0
     /// Which icons those are, for the panel's "Didn't fit" (plan S4: the
@@ -4963,6 +4956,11 @@ final class AppState {
         }
     }
 
+    /// The one write path for the engine snapshot mirror (Apply and
+    /// engine-event handling route through here). Content-gated: every
+    /// assignment fires @Observable invalidation (re-running the editor
+    /// pipeline while settings is open), and most snapshots differ only by
+    /// `takenAt`.
     func updateSnapshot(_ snap: EngineSnapshot) {
         defer {
             if transitions.anchored {
@@ -5024,9 +5022,6 @@ final class AppState {
         // mark that came and went with the reveal state was worse than none.
         // An app that EVER draws its bar icon from a bundle-less helper can't
         // be hidden reliably; the user clears it by fixing the app.
-        for item in snap.items {
-            if let bundle = item.id.bundleID { absentBundles.remove(bundle) }
-        }
         // One sighting is not evidence: a walk that lands mid-relaunch finds
         // a pid LaunchServices has no record of yet and reads a perfectly
         // normal app as bundle-less (Sconce and a Pelmet launcher, both

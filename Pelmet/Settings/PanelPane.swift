@@ -30,7 +30,7 @@ struct PanelPane: View {
                         .fixedSize(horizontal: false, vertical: true)
                     // Only with a second display, or one that picked its own:
                     // with one display there is nothing to set apart.
-                    if NSScreen.screens.count > 1 || !ownTargets.isEmpty {
+                    if ConnectedScreens.shared.screens.count > 1 || !ownTargets.isEmpty {
                         Text("Set per display in [Settings › Displays](dimble-settings:displays).")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -55,6 +55,9 @@ struct PanelPane: View {
                 // Search found a row this mode doesn't draw: land on the
                 // picker that brings it.
                 appState.settingsFocusRow = "hiddenIconsIn"
+            } else if row == "panelNames", appState.settings.panel.style != .tiles {
+                // "Show names" is only drawn for tiles: land on the style row.
+                appState.settingsFocusRow = "panelStyle"
             } else if row == "panelFold", appState.settings.panel.alwaysHidden == .hidden {
                 // "Opens from" isn't drawn with Always Hidden off: land on
                 // the menu that brings it.
@@ -65,7 +68,7 @@ struct PanelPane: View {
 
     /// What the connected displays picked for themselves (Settings › Displays).
     private var ownTargets: Set<RevealTarget> {
-        Set(NSScreen.screens.compactMap { appState.settings.ownRevealTarget(forDisplayUUID: $0.displayUUIDString) })
+        Set(ConnectedScreens.shared.screens.compactMap { appState.settings.ownRevealTarget(forDisplayUUID: $0.displayUUIDString) })
     }
 
     /// Panel and Row as they are used: this tab's choice and each display's
@@ -175,10 +178,11 @@ struct PanelPane: View {
         }
     }
 
-    /// Auto and 3 to 8 (1 to 4 for the list), plus a width the edge drag
-    /// set outside them.
+    /// Auto and 3 to 8 (2 to 4 for the list: the stored range starts at 2,
+    /// so a 1 would not survive a restart), plus a width the edge drag set
+    /// outside them.
     private func columnChoices(_ current: Int?, style: PanelOptions.Style) -> [(Int?, LocalizedStringKey)] {
-        var counts = style == .list ? Array(1...4) : Array(3...8)
+        var counts = style == .list ? Array(2...4) : Array(3...8)
         if let current, !counts.contains(current) { counts.append(current); counts.sort() }
         return [(nil, "Auto")] + counts.map { (Optional($0), LocalizedStringKey(String($0))) }
     }
@@ -222,7 +226,7 @@ private struct PanelPreviewStage: View {
     @State private var tipTask: Task<Void, Never>?
     @State private var height = Self.minHeight
     @State private var shrinkTask: Task<Void, Never>?
-    /// Bumped when the presenter has pictures or apps this hasn't drawn.
+    /// Bumped once the presenter has read its corpus, so the preview redraws with it.
     @State private var revision = 0
     /// The panel the last body drew, for a key to act on.
     @State private var drawn = Drawn()
@@ -318,7 +322,6 @@ private struct PanelPreviewStage: View {
         // A column drag whose end SwiftUI dropped (a key pressed mid-drag).
         .onDisappear { presenter.saveColumnsIfUnsaved() }
         .onChange(of: target, initial: true) { _, target in switched(to: target) }
-        .task(id: passKey) { picture() }
     }
 
     private var hint: LocalizedStringKey {
@@ -515,24 +518,6 @@ private struct PanelPreviewStage: View {
     private func setQuery(_ new: String) {
         query = new
         selected = new.isEmpty ? nil : presenter.previewBestMatch(query: new)
-    }
-
-    // MARK: - Pictures
-
-    /// What can bring tiles with no picture yet into view.
-    private var passKey: String {
-        let options = appState.settings.panel
-        return "\(target.rawValue) \(foldOpen) \(options.alwaysHidden.rawValue) \(options.alwaysHiddenOpen)"
-    }
-
-    /// The pass the panel runs on open, for the tiles the preview shows
-    /// with a stand-in.
-    private func picture() {
-        guard let layout = target.panelLayout,
-              let missing = presenter.previewContent(layout: layout, query: "", selected: nil, foldOpen: foldOpen)?.missing,
-              !missing.isEmpty
-        else { return }
-        presenter.picturePassIfNeeded(missing) { revision += 1 }
     }
 }
 

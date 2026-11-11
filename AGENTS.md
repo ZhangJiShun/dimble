@@ -20,7 +20,7 @@ Swift，macOS 27 SDK，GPLv3。**这是 `fif7y/dimble`（作者 Gabriel Faucon�
 |---|---|
 | `Packages/PelmetCore/` | 纯逻辑，有大量单元测试：设置存储、分区模型、面板网格与尺寸（`PanelGrid`/`PanelOptions`）、悬停状态机（`HoverReveal`）、面板定位（`PanelHorizontalPlacement`）、面板冻结（`PanelPresentationSession`）、重新隐藏状态机 |
 | `Packages/PelmetEngine/` | 菜单栏「收敛」引擎：读取图标（辅助功能 AX）、移动图标（合成鼠标拖拽）、探针命令行 `pelmet-probe` |
-| `Pelmet/App/` | `AppState`（4000+ 行的总调度）、`TransitionCoordinator`（显示/隐藏转场）、`ApplyPass`（应用布局）、`ShowRules`、`BundleRelocation` |
+| `Pelmet/App/` | `AppState`（5000+ 行的总调度）、`TransitionCoordinator`（显示/隐藏转场）、`ApplyPass`（应用布局）、`ShowRules`、`BundleRelocation` |
 | `Pelmet/Panel/` `Pelmet/Panels/` | 面板：`PanelPresenter`（打开、定位、刷新）、`PanelView`（画格子）、`ItemPictures`、`GlassPanel`（毛玻璃窗口） |
 | `Pelmet/Events/` | 鼠标与点击监听：`MenuBarBandMonitor`（悬停）、`PointerMoveTap`、`ClockClickRelay`、`HotkeyManager` |
 | `Pelmet/StatusItem/` | 箭头图标、分隔符、遮罩 `ConcealGhostOverlay`、辅助进程管理 `HelperHosts` |
@@ -42,9 +42,9 @@ scripts/dev-install.sh --rollback                   # 换回上一个版本
 ```
 
 - **工程文件 `Pelmet.xcodeproj` 由 `project.yml` 生成、不进 git。** 合并上游或新增源文件后必须重新生成（`xcodegen generate`），否则编译报「找不到某个类型」。`dev-install.sh` 会自动执行。
-- 本机没有装官方 xcodegen 时，曾用过 Codex 留在 `/private/tmp/codex-dimble-xcodegen-*/xcodegen/bin/xcodegen` 的副本（经用户同意）；长期应 `brew install xcodegen`（全局安装要先问）。用环境变量 `DIMBLE_XCODEGEN` 指定。
+- xcodegen 已用 Homebrew 装在 `/opt/homebrew/bin/xcodegen`，`dev-install.sh` 直接用 PATH 里的；要换别的副本用环境变量 `DIMBLE_XCODEGEN` 指定。
 - 命令行编译（不签名，只验证能编过）：`xcodebuild -project Pelmet.xcodeproj -scheme Pelmet -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build`。直接 `build` 会因缺 Mac Development 证书失败，这不是代码问题。
-- App 工程自己的测试在 `PelmetTests/`，用同样参数把 `build` 换成 `test`。**跑它会启动一个未签名的 Dimble 当测试宿主，系统可能弹出「Dimble 想要录制屏幕」的提示，点「拒绝」即可**（不要点「打开系统设置」去授权：那会把一个临时副本加进授权列表；已装在 `/Applications` 的固定证书版本不受影响）。
+- App 工程自己的测试在 `PelmetTests/`，用同样参数把 `build` 换成 `test`。测试宿主（`PelmetApp.isTestHost`）用独立的设置存储、不启动引擎、退出不保存，不会碰你的真实设置。**跑它会启动一个未签名的 Dimble 当测试宿主，系统可能弹出「Dimble 想要录制屏幕」的提示，点「拒绝」即可**（不要点「打开系统设置」去授权：那会把一个临时副本加进授权列表；已装在 `/Applications` 的固定证书版本不受影响）。
 - 日志：`~/Library/Logs/Dimble/`（最新一个文件）。看授权状态搜 `ax:`，看转场搜 `converge`、`cover`。
 - 没有真机截图验证能力时，**如实说「没有实机看过」**，不要写「已验证界面」。
 
@@ -56,9 +56,11 @@ scripts/dev-install.sh --rollback                   # 换回上一个版本
 
 1. **面板样式三选一**（设置 › 面板 › 样式）：图块（原样）、紧凑（格子 38pt、图标 27pt）、列表（图标加名称并排，默认 2 列，无常驻底）。数据在 `PanelOptions.style`，尺寸在 `PanelMetrics.tight/.list`，绘制在 `PanelView` 的 `PanelTileLabel` 与 `Well`，右键菜单也有对应项。每种样式单独记自己的列数。单行（row）沿用上游已有的布局。
 2. **面板在图标正下方水平居中**，放不下时被屏幕边缘推进来（`PanelHorizontalPlacement`，`PanelPresenter.place`）。居中时拖左边缘调列数按中线算宽度，被边缘推着时按右边缘算。设置页预览同步居中。
-3. **面板打开期间内容冻结**（`PanelPresentationSession`）：打开那一刻的格子集合与图片定住，不乱跳。占位图允许升级成真图一次，确认消失的图标（`settleNoIcon`）会从冻结的快照里移除。
+3. **面板打开期间内容冻结**（`PanelPresentationSession`）：打开那一刻的格子集合与图片定住，不乱跳。确认消失的图标（`settleNoIcon`）会从冻结的快照里移除。（面板全用 App 原生图标后，上游的「截图存图、占位图升级成真图」链路已在 2026-11-11 停用，`ItemPictures` 只剩遮罩用的静态切图函数。）
 4. **悬停展开**（`HoverReveal`、设置里的悬停范围）、**面板用 App 原生图标**（`PanelItemImageSource`）。
 5. 一批稳定性修复（计时器上限、辅助进程重启、引导窗口缓存、AX 超时、快捷键冲突重试、开机启动开关、退出前保存设置、事件监听失效重建、`release.sh` 的两个坑）。
+6. **关闭自动更新**：`project.yml` 里 `SUFeedURL`、`SUPublicEDKey` 留空、`SUEnableAutomaticChecks: false`，否则上游的更新源会用上游原版覆盖本地版本（丢样式、丢授权）。同步上游时这几行冲突一律保留本地。副作用：这个 fork 不能直接用 `release.sh` 发版（签名校验要公钥）。
+   取而代之的是**只提醒不安装**（`Pelmet/Update/UpstreamWatch.swift`，解析在 `PelmetCore/UpstreamFeed.swift`）：启动 1 分钟后及每天读一次上游 appcast，只看正式版（跳过 beta），比本机 `CFBundleVersion` 新就点亮菜单栏小圆点；关于页显示「上游已发布 x.y.z」，按钮只打开上游发布页，打开关于页后小圆点熄灭。接入点：`AppState.refreshUpdateDot`/`wantsUpdateDot`、`PelmetStatusItem` 初始化、`SettingsView` 关于页 `UpstreamRow()`。同步上游时保留。
 
 **同步上游的做法：**
 - 远程：`origin` 是用户自己的 fork（`ZhangJiShun/dimble`），`upstream` 是 `fif7y/dimble`。
@@ -106,7 +108,7 @@ scripts/dev-install.sh --rollback                   # 换回上一个版本
 - **不要乱用 `try? await Task.sleep`**：任务被取消后它会立刻返回，会让拖拽等流程失去间隔。新代码取消后要检查 `Task.isCancelled`。
 - 事件监听（CGEventTap）被系统停用后需要重建，别只在回调里 re-enable。
 - 辅助功能（AX）调用在主线程时要设超时，默认 6 秒会卡死界面。
-- 修 bug 先看 `docs/REVIEW-FIXES-0.3.2.md`、`docs/ISSUE-AUDIT-0.3.0.md`，避免重复。
+- 修 bug 先看 `docs/AUDIT-FULL-2026-11-11.md`（全项目体检及修复结果）、`docs/AUDIT-CPU-BUGS-2026-11-09.md`、`docs/REVIEW-FIXES-0.3.2.md`、`docs/ISSUE-AUDIT-0.3.0.md`，避免重复。
 - 提交说明用简洁中文；提交结尾带 Claude 协作署名；一次提交讲一件事。**提交和推送只在用户说「没问题 / 可以提交」之后做（见 §5 检查点），之前不提交、不推送。**
 
 ---

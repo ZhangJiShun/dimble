@@ -27,7 +27,7 @@ public enum PlacementGeometry {
     /// Primary-display band membership: an AX walk can carry another
     /// display's bar (its own coordinate origin).
     public static func isPrimary(_ f: CGRect, screenMaxX: CGFloat) -> Bool {
-        MenuBarGeometry.isInBand(f) && f.midX > 0 && f.midX < screenMaxX
+        MenuBarGeometry.isInPrimaryBand(f, primaryMaxX: screenMaxX)
     }
 
     /// Indices of the frames the native « holds. Trapped items report
@@ -60,11 +60,5 @@ public enum PlacementGeometry {
         let shown = frames.indices.filter { drawn[$0] }
         let amongShown = overflowTrapped(shown.map { frames[$0] }).map { shown[$0] }
         return overflowTrapped(frames).filter { !drawn[$0] }.union(amongShown)
-    }
-
-    /// How many measured items the native « has trapped. The editor's
-    /// overflow note reads this.
-    public static func overflowTrappedCount(_ frames: [CGRect]) -> Int {
-        overflowTrapped(frames).count
     }
 }

@@ -1811,7 +1811,19 @@ final class ExtrasManager {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
         process.arguments = ["run", name]
-        try? process.run()
+        let errors = Pipe()
+        process.standardError = errors
+        process.terminationHandler = { finished in
+            guard finished.terminationStatus != 0 else { return }
+            let why = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .split(separator: "\n").first.map(String.init) ?? ""
+            PelmetLog.log("shortcuts: \"\(name)\" exited \(finished.terminationStatus)\(why.isEmpty ? "" : " — \(why.prefix(120))")")
+        }
+        do {
+            try process.run()
+        } catch {
+            PelmetLog.log("shortcuts: could not run \"\(name)\" — \(error.localizedDescription)")
+        }
     }
 
     /// Names from the user's Shortcuts library (for the picker).
@@ -1839,10 +1851,13 @@ final class ExtrasManager {
         let pipe = Pipe()
         process.standardOutput = pipe
         guard (try? process.run()) != nil else { return [] }
+        // A stuck Shortcuts daemon must not leave the menu waiting forever.
+        let watchdog = process.terminateAfter(15)
         // Read BEFORE waiting: with output past the 64KB pipe buffer, the
         // child blocks on write and waitUntilExit never returns.
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        watchdog.cancel()
         return String(decoding: data, as: UTF8.self)
             .split(separator: "\n")
             .map(String.init)
@@ -1950,7 +1965,7 @@ final class CameraMicMonitor {
         // wall-clock transition no listener fires for) and any missed
         // listener delivery. Generous tolerance = coalesced wakeups.
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            self?.poll()
+            MainActor.assumeIsolated { self?.poll() }
         }
         timer?.tolerance = 5
         installListeners()
@@ -2125,7 +2140,7 @@ final class CameraMicMonitor {
             audioRunningSince = Date()
             sustainedTimer?.invalidate()
             sustainedTimer = Timer.scheduledTimer(withTimeInterval: Self.sustainedAudio + 0.1, repeats: false) { [weak self] _ in
-                self?.poll()
+                MainActor.assumeIsolated { self?.poll() }
             }
         } else if !audio {
             audioRunningSince = nil

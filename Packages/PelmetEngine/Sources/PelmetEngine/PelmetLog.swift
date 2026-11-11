@@ -73,7 +73,7 @@ public enum PelmetLog {
         rotateIfNeeded()
         let handle = openAppending()
         if let note = folderMigration {
-            handle?.write(Data("\(stamp.string(from: Date())) \(note)\n".utf8))
+            try? handle?.write(contentsOf: Data("\(stamp.string(from: Date())) \(note)\n".utf8))
         }
         return handle
     }()
@@ -133,13 +133,13 @@ public enum PelmetLog {
     /// down on purpose rather than being killed.
     public static func logBlocking(_ message: String) {
         let line = line(message)
-        queue.sync { handle?.write(Data(line.utf8)) }
+        queue.sync { try? handle?.write(contentsOf: Data(line.utf8)) }
     }
 
     public static func log(_ message: String) {
         let line = line(message)
         queue.async {
-            handle?.write(Data(line.utf8))
+            try? handle?.write(contentsOf: Data(line.utf8))
             writesSinceRotateCheck += 1
             if writesSinceRotateCheck >= rotateCheckInterval {
                 writesSinceRotateCheck = 0

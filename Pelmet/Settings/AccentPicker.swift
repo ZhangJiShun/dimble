@@ -174,6 +174,18 @@ struct AccentPopover: View {
         AccentStore.shared.choice = .custom
     }
 
+    /// While a drag is under way only the local color moves; the store (two
+    /// UserDefaults writes and a redraw of every accent reader) waits for `onEnded`.
+    private func dragPick(_ new: AccentHSB) {
+        endTyping()
+        color = new
+        text = AccentHSB.text(new.hex)
+    }
+
+    private func commitDrag() {
+        apply(color)
+    }
+
     /// From the wheel, the slider or the eyedropper: the field follows and lets go.
     private func pick(_ new: AccentHSB) {
         endTyping()
@@ -208,8 +220,8 @@ struct AccentPopover: View {
         .frame(width: Self.wheelSize, height: Self.wheelSize)
         .contentShape(Circle())
         .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
-            pick(color.onWheel(at: drag.location, radius: radius))
-        })
+            dragPick(color.onWheel(at: drag.location, radius: radius))
+        }.onEnded { _ in commitDrag() })
         .accessibilityElement()
         .accessibilityLabel(Text("Color wheel"))
         .accessibilityValue(Text(verbatim: AccentHSB.text(color.hex)))
@@ -231,8 +243,8 @@ struct AccentPopover: View {
             .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
                 var next = color
                 next.brightness = min(1, max(0, (drag.location.x - inset) / span))
-                pick(next)
-            })
+                dragPick(next)
+            }.onEnded { _ in commitDrag() })
         }
         .frame(height: 14)
         .accessibilityElement()

@@ -368,9 +368,6 @@ public struct ExtraItemSpec: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// How concealed icons come back on reveal. Conceal always fades (the agent
-/// pops items off with no animation; Pelmet's ghost overlay manufactures the
-/// hide motion) — this only styles the reveal side.
 /// Glyph for Pelmet's own menu bar icon. Each style has a concealed and a
 /// revealed face so the icon keeps pointing at what a click will do.
 public enum StatusIconStyle: String, Codable, CaseIterable, Sendable, Identifiable {
@@ -406,6 +403,9 @@ public enum StatusIconStyle: String, Codable, CaseIterable, Sendable, Identifiab
     }
 }
 
+/// How concealed icons come back on reveal. Conceal always fades (the agent
+/// pops items off with no animation; Pelmet's ghost overlay manufactures the
+/// hide motion) — this only styles the reveal side.
 public enum RevealAnimation: String, Codable, CaseIterable, Sendable {
     /// No animation — icons appear in place once the swap lands.
     case instant

@@ -1,7 +1,8 @@
 // RevealPresenter.swift
 // The seam between "the rehide machine decided to show these sections" and
 // how they get shown (docs/PANEL-PLAN.md §2). The machine still owns revealed
-// and concealed; a presenter only draws it. Today the bar is the only one.
+// and concealed; a presenter only draws it. PanelPresenter is the one that
+// draws panel and row; the bar itself is shown with no presenter.
 
 import PelmetCore
 

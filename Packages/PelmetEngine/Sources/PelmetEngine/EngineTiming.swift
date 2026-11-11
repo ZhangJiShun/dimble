@@ -25,7 +25,6 @@ enum EngineTiming {
     }
     /// AX messaging timeouts — a stuck agent/app must never wedge a walk.
     static let axAgentTimeout: Float = 0.25
-    static let axAppTimeout: Float = 0.5
     /// Empty-AX-walk deferral: bounded retries while the agent tree is unreadable.
     static let emptyAXRetries = 6
     static let emptyAXRetryDelay: Duration = .milliseconds(500)

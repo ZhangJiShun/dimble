@@ -37,7 +37,7 @@ final class HotkeyManager {
         installHandlerIfNeeded()
 
         var ref: EventHotKeyRef?
-        let hotKeyID = EventHotKeyID(signature: OSType(0x4E4F4F4B) /* PELMET */, id: slot.rawValue)
+        let hotKeyID = EventHotKeyID(signature: OSType(0x4E4F4F4B) /* NOOK */, id: slot.rawValue)
         let status = RegisterEventHotKey(
             spec.keyCode,
             spec.modifiers,

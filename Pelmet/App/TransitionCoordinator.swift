@@ -118,13 +118,6 @@ final class TransitionCoordinator {
     /// Pelmet's own items as the idle picture shows them (`ownBarSignature`
     /// at capture): the backdrop signature can't see them.
     private var revealCoverOwnBar = ""
-    /// The bar as it looks under Notification Center's open panel, over the
-    /// blink cover's span: taken once after an entrance blink (the panel is
-    /// open, the bar quiet), kept while the backdrop, wallpaper and active
-    /// display hold. The entrance blink swaps to it once the panel has slid
-    /// in: from then on nothing moves under the bar, and a still of that
-    /// state is exact (#51).
-
     private func backdropMayHaveChanged() {
         guard let appState, !revealCoverSnapshot.isEmpty || !revealedStripSnapshot.isEmpty || parkedCover != nil else { return }
         let list = ConcealGhostOverlay.onScreenWindows()
@@ -260,11 +253,6 @@ final class TransitionCoordinator {
         scheduleRevealCoverPrecapture()
     }
 
-    /// A reveal with the cover still wanted: start the capture if nothing
-    /// did (the same live capture the no-picture path pays, minus the
-    /// Smooth exemption it keeps), then wait for whichever is in flight —
-    /// bounded, so a slow capture degrades to the uncovered reveal it
-    /// always was rather than holding the bar.
     /// The state machine releases a queued toggle at settle, ~100ms in, but
     /// the pictures lift ~500ms later. A transition started under them
     /// captured and covered on top of a moving picture: the icons vanished
@@ -304,6 +292,11 @@ final class TransitionCoordinator {
         PelmetLog.log("transition: waited \(Int(-started.timeIntervalSinceNow * 1000))ms for the picture pass\(passInFlight ? " — still running, going on" : "")")
     }
 
+    /// A reveal with the cover still wanted: start the capture if nothing
+    /// did (the same live capture the no-picture path pays, minus the
+    /// Smooth exemption it keeps), then wait for whichever is in flight —
+    /// bounded, so a slow capture degrades to the uncovered reveal it
+    /// always was rather than holding the bar.
     private func awaitCoverRetake(style: RevealAnimation) async {
         guard revealCoverSnapshot.isEmpty, precaptureInFlight || (revealCoverWanted && style != .smooth) else { return }
         if !precaptureInFlight {
@@ -1035,8 +1028,8 @@ final class TransitionCoordinator {
     /// picture as the press relay puts one back. Ends the hold that
     /// `AppState.showItemInBar` put on the idle picture while they were out.
     func performItemsConceal(_ keys: Set<ItemID>, settles: Bool, trace: PerfTrace) {
-        Task {
-            guard let appState else { return }
+        Task { [weak self] in
+            guard let self, let appState else { return }
             await awaitPreviousLift()
             let cover = await beginBarCover(label: "show")
             trace.mark("cover", detail: cover == nil ? "none" : "up")
@@ -2106,8 +2099,8 @@ final class TransitionCoordinator {
             }
             // Under Notification Center's panel the bar is not the bar a
             // reveal or a clock click will find: leave the bare picture
-            // (or its absence) alone, the blink keeps its own picture of
-            // the bar under the panel (#51).
+            // (or its absence) alone. The blink's cover is always the
+            // click's own picture, never this one.
             guard !ClockClickRelay.notificationCenterIsOpen() else {
                 PelmetLog.log("cover: panel open, precapture skipped")
                 return
@@ -2115,7 +2108,6 @@ final class TransitionCoordinator {
             let activeDisplay = appState.lastMouseDownDisplay ?? Self.displayUnderPointer
             let rect = precaptureRect
             let backdrop = ConcealGhostOverlay.backdropSignature(of: rect) + ConcealGhostOverlay.surfaceSignature()
-            let underPanel = ClockClickRelay.notificationCenterIsOpen()
             let ownBar = appState.ownBarSignature
             let epoch = pressEpoch
             let taken = await ConcealGhostOverlay.snapshotSet(of: rect)
@@ -2137,7 +2129,8 @@ final class TransitionCoordinator {
             revealCoverBackdrop = backdrop
             revealCoverTakenRect = rect
             revealCoverOwnBar = ownBar
-            revealCoverUnderPanel = underPanel
+            // The panel is not open here (checked above): the picture is the bare bar.
+            revealCoverUnderPanel = false
             revealCoverWanted = false
             parkedCover = nil
         }

@@ -75,7 +75,6 @@ import Testing
         #expect(g.rows[0][4].frame == CGRect(x: 200, y: 0, width: 44, height: 44))
         #expect(g.rows[1][1].frame == CGRect(x: 50, y: 50, width: 44, height: 44))
         #expect(g.contentSize == CGSize(width: 244, height: 94))
-        #expect(g.panelSize == CGSize(width: 264, height: 114))
     }
 
     @Test func namedFramesAndSize() {
@@ -95,7 +94,7 @@ import Testing
     @Test func noTilesNoSize() {
         let g = grid([])
         #expect(g.rows.isEmpty && g.columnCount == 0)
-        #expect(g.contentSize == .zero && g.panelSize == .zero)
+        #expect(g.contentSize == .zero)
         #expect(g.firstTile == nil)
         #expect(grid([.rowBreak, .rowBreak]).rows.isEmpty)
     }
@@ -141,7 +140,6 @@ import Testing
         #expect(g.metrics == .row)
         #expect(g.rows[0][3].frame == CGRect(x: 102, y: 0, width: 34, height: 28))
         #expect(g.contentSize == CGSize(width: 272, height: 28))
-        #expect(g.panelSize == CGSize(width: 282, height: 38))
     }
 
     @Test func breaksAreDividersInARow() {
@@ -226,7 +224,6 @@ import Testing
         #expect(g.rows[0].allSatisfy { $0.frame.height == 28 })
         // The capsule is as wide as the tiles it holds, 231.
         #expect(g.contentSize == CGSize(width: 231, height: 28))
-        #expect(g.panelSize == CGSize(width: 241, height: 38))
         #expect(g.tileWidth(of: t(1)) == 61 && g.tileWidth(of: t(2)) == 68 && g.tileWidth(of: t(0)) == 34)
         // The well fills the tile in the row, and is the metrics' elsewhere.
         #expect(g.wellSize(tileWidth: 61) == CGSize(width: 61, height: 28))

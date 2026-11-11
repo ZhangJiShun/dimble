@@ -68,7 +68,14 @@ launch_app() {
 
 # ---------- 回退 ----------
 if [ "$ROLLBACK" -eq 1 ]; then
-    latest="$(ls -1dt "$BACKUP_DIR"/Dimble-*.app 2>/dev/null | head -n 1 || true)"
+    # 按文件名末尾的时间戳（YYYYMMDD-HHMMSS）挑最新的：不看修改时间（ditto 会保留原时间），
+    # 也排除「回退时被换下来的那份」，否则连续回退会在两个版本之间来回切。
+    latest="$(for f in "$BACKUP_DIR"/Dimble-*.app; do
+            [ -d "$f" ] || continue
+            case "$f" in */Dimble-replaced-by-rollback-*) continue ;; esac
+            stamp="$(basename "$f" | sed -nE 's/.*-([0-9]{8}-[0-9]{6})\.app$/\1/p')"
+            [ -n "$stamp" ] && printf '%s\t%s\n' "$stamp" "$f"
+        done | sort | tail -n 1 | cut -f2- || true)"
     [ -n "$latest" ] || { echo "没有可回退的备份（$BACKUP_DIR 里没有 Dimble-*.app）" >&2; exit 1; }
     quit_installed
     if [ -d "$INSTALLED" ]; then
@@ -122,21 +129,29 @@ grep -E "error:|BUILD " "$BUILD_LOG" || true
 [ -d "$NEW_APP" ] || { echo "没有生成 $NEW_APP，编译失败；完整日志: $BUILD_LOG" >&2; exit 1; }
 
 # ---------- 签名（由内向外；不用 --deep，每个组件按自己的标识生成签名要求）----------
+sign_one() {
+    local out
+    if ! out="$(codesign --force -s "$IDENTITY" "$1" 2>&1)"; then
+        echo "错误：签名失败：$1" >&2
+        echo "$out" >&2
+        exit 1
+    fi
+}
 sign_all() {
     local app="$1" sparkle
     sparkle="$app/Contents/Frameworks/Sparkle.framework"
     if [ -d "$sparkle" ]; then
         local nested
         while IFS= read -r nested; do
-            codesign --force -s "$IDENTITY" "$nested" >/dev/null 2>&1
+            sign_one "$nested"
         done < <(find "$sparkle/Versions" -mindepth 2 -maxdepth 3 \( -name '*.xpc' -o -name '*.app' -o -name 'Autoupdate' \) | sort)
-        codesign --force -s "$IDENTITY" "$sparkle" >/dev/null 2>&1
+        sign_one "$sparkle"
     fi
     local helper
     for helper in "$app"/Contents/Helpers/*.app; do
-        [ -d "$helper" ] && codesign --force -s "$IDENTITY" "$helper" >/dev/null 2>&1
+        [ -d "$helper" ] && sign_one "$helper"
     done
-    codesign --force -s "$IDENTITY" "$app" >/dev/null 2>&1
+    sign_one "$app"
     codesign --verify --deep --strict "$app"
 }
 echo "==> 签名（$IDENTITY）"

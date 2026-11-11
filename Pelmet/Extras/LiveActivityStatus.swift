@@ -208,6 +208,7 @@ final class LiveActivityStatus {
         process.standardOutput = pipe
         let errors = Pipe()
         process.standardError = errors
+        let startedAt = Date()
         let lines = FocusStatus.LineSplitter()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
@@ -231,7 +232,8 @@ final class LiveActivityStatus {
             // Why `log` quit, when it says (it has a "Must be admin" refusal).
             let why = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
                 .split(separator: "\n").first.map(String.init) ?? ""
-            Task { @MainActor [weak self] in self?.streamEnded(why) }
+            let ranFor = Date().timeIntervalSince(startedAt)
+            Task { @MainActor [weak self] in self?.streamEnded(why, ranFor: ranFor) }
         }
         do {
             try process.run()
@@ -240,14 +242,14 @@ final class LiveActivityStatus {
         } catch {
             // Retried like a stream that ended.
             PelmetLog.log("liveactivity: log stream failed — \(error.localizedDescription)")
-            streamEnded("could not start (\(error.localizedDescription))")
+            streamEnded("could not start (\(error.localizedDescription))", ranFor: 0)
         }
     }
 
     /// logd restarts (or a kill) end the child; back off like FocusStatus.
     /// The replay on the way back reads only the gap, to catch an end it
     /// swallowed.
-    private func streamEnded(_ why: String) {
+    private func streamEnded(_ why: String, ranFor: TimeInterval) {
         stream = nil
         guard !stopped else { return }
         // A standard account: `log stream` is refused, and will be every
@@ -260,6 +262,8 @@ final class LiveActivityStatus {
         // Where the replay on the way back starts: the first end of a run
         // of failures, until a stream is running again.
         if gapStart == nil { gapStart = Date() }
+        // A stream that stayed up a while was healthy: start the backoff over.
+        if ranFor >= FocusStatus.stableRun { restarts = 0 }
         restarts += 1
         let delay = min(60, 2 << min(restarts, 5))
         PelmetLog.log("liveactivity: log stream ended\(why.isEmpty ? "" : " (\(why.prefix(120)))"), retry in \(delay)s")
@@ -314,10 +318,7 @@ final class LiveActivityStatus {
               let pid = object["processID"] as? Int
         else { return nil }
         // `log`'s ndjson timestamps: "2026-10-27 08:16:19.694652-0400".
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZ"
-        let date = (object["timestamp"] as? String).flatMap(formatter.date(from:)) ?? Date()
+        let date = (object["timestamp"] as? String).flatMap(FocusStatus.logTimestamps.date(from:)) ?? Date()
         return Entry(message: message, date: date, agent: Int32(pid))
     }
 }

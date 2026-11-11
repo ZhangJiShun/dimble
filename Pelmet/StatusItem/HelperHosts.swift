@@ -137,7 +137,7 @@ final class HelperHosts {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
         config.environment = ["PELMET_PARENT_PID": "\(ProcessInfo.processInfo.processIdentifier)"]
-        NSWorkspace.shared.openApplication(at: url, configuration: config) { app, error in
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { [weak self] app, error in
             Task { @MainActor [weak self] in
                 guard let self, var host = self.hosts[section] else { return }
                 host.launching = false

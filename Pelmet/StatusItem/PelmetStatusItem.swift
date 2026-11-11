@@ -55,7 +55,7 @@ final class PelmetStatusItem {
         }
         warning = !appState.accessibilityGranted
         applyImage()
-        showUpdateDot(SparkleController.shared.availableVersion != nil)
+        showUpdateDot(AppState.wantsUpdateDot)
     }
 
     /// Which face the glyph is showing, so the warning colour can be
@@ -445,6 +445,7 @@ final class AccentDotView: NSView {
     private func track() {
         withObservationTracking {
             _ = AccentStore.shared.choice
+            _ = AccentStore.shared.customHex
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }

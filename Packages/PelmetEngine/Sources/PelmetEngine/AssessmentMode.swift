@@ -20,8 +20,9 @@ public final class AssessmentAssertion {
 }
 
 public enum AssessmentMode {
-    /// Whether MenuBarClientCore resolved on this OS build. Re-check on app
-    /// activation; a 27.x update can remove the private API.
+    /// Whether MenuBarClientCore resolved on this OS build. Resolved once per
+    /// process (the shim loads it with a `dispatch_once`), so the answer does
+    /// not change while the app runs; a 27.x update can remove the API.
     public static var isAvailable: Bool {
         pelmet_assessmentModeAvailable()
     }

@@ -89,48 +89,42 @@ echo "==> Generating Sparkle appcast"
 # isn't possible; path trust is the available control.)
 GENERATE_APPCAST="$REPO_ROOT/build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast"
 if [[ -n "${SKIP_NOTARIZE:-}" ]]; then
-    echo "==> SKIP_NOTARIZE: smoke DMG is in $RELEASES_DIR, appcast skipped"
-    exit 0
+    echo "==> SKIP_NOTARIZE: notarization skipped; appcast is still generated and verified in $RELEASES_DIR"
 fi
 # No fallback to shared DerivedData: the archive above fetches Sparkle into
 # build/SourcePackages, so a missing tool means a broken build, not a cue to
 # hand the signing key to whatever binary turns up.
-[[ -x "$GENERATE_APPCAST" ]] || { echo "error: generate_appcast not found at $GENERATE_APPCAST" >&2; exit 1; }
-if [[ -n "$GENERATE_APPCAST" ]]; then
-    # Signs with the EdDSA private key from the keychain (generate_keys), or
-    # from a file when SPARKLE_KEY_FILE is set (CI).
-    APPCAST_ARGS=(--download-url-prefix "https://github.com/fif7y/dimble/releases/download/v$VERSION/")
-    APPCAST_ARGS+=(--full-release-notes-url "https://github.com/fif7y/dimble/releases")
-    [[ -n "${SPARKLE_KEY_FILE:-}" ]] && APPCAST_ARGS+=(--ed-key-file "$SPARKLE_KEY_FILE")
-    [[ -n "$CHANNEL" ]] && APPCAST_ARGS+=(--channel "$CHANNEL")
-    "$GENERATE_APPCAST" "${APPCAST_ARGS[@]}" "$RELEASES_DIR"
-    # generate_appcast stamps EVERY entry with the current release's
-    # download-url-prefix, pointing prior versions' DMGs at a tag that
-    # doesn't host them (404 for anyone updating from further back).
-    # Re-point each Dimble-X.Y.Z.dmg at its own vX.Y.Z tag.
-    # (every old name: Nook-*.dmg, Pelmet-*.dmg and Pliss-*.dmg builds still live
-    # in the releases dir and the appcast, and keep their old file names; only
-    # new releases are named Dimble-*)
-    perl -pi -e 's#(releases/download/)v[\w.-]+/((?:Nook|Pelmet|Pliss|Dimble)-([\w.-]+)\.dmg)#$1v$3/$2#g' \
-        "$RELEASES_DIR/appcast.xml"
-    # Same for deltas: DimbleNN-MM.delta (PlissNN-MM, PelmetNN-MM, NookNN-MM.delta for
-    # earlier releases) lives on the release of build NN,
-    # whose tag comes from the item carrying <sparkle:version>NN.
-    perl -0777 -pi -e '
-        my %tag;
-        while (/<item>(.*?)<\/item>/sg) {
-            my $item = $1;
-            my ($build) = $item =~ m#<sparkle:version>([^<]+)<#;
-            my ($short) = $item =~ m#<sparkle:shortVersionString>([^<]+)<#;
-            $tag{$build} = "v$short" if defined $build && defined $short;
-        }
-        s#(releases/download/)v[\w.-]+/((?:Nook|Pelmet|Pliss|Dimble)(\d+)-\d+\.delta)#exists $tag{$3} ? "$1$tag{$3}/$2" : $&#ge;
-    ' "$RELEASES_DIR/appcast.xml"
-    echo "==> Appcast written to $RELEASES_DIR/appcast.xml (prior-version URLs re-pointed)"
-else
-    echo "error: generate_appcast not found — cannot produce a verified update" >&2
-    exit 1
-fi
+[[ -x "$GENERATE_APPCAST" ]] || { echo "error: generate_appcast not found at $GENERATE_APPCAST — cannot produce a verified update" >&2; exit 1; }
+# Signs with the EdDSA private key from the keychain (generate_keys), or
+# from a file when SPARKLE_KEY_FILE is set (CI).
+APPCAST_ARGS=(--download-url-prefix "https://github.com/fif7y/dimble/releases/download/v$VERSION/")
+APPCAST_ARGS+=(--full-release-notes-url "https://github.com/fif7y/dimble/releases")
+[[ -n "${SPARKLE_KEY_FILE:-}" ]] && APPCAST_ARGS+=(--ed-key-file "$SPARKLE_KEY_FILE")
+[[ -n "$CHANNEL" ]] && APPCAST_ARGS+=(--channel "$CHANNEL")
+"$GENERATE_APPCAST" "${APPCAST_ARGS[@]}" "$RELEASES_DIR"
+# generate_appcast stamps EVERY entry with the current release's
+# download-url-prefix, pointing prior versions' DMGs at a tag that
+# doesn't host them (404 for anyone updating from further back).
+# Re-point each Dimble-X.Y.Z.dmg at its own vX.Y.Z tag.
+# (every old name: Nook-*.dmg, Pelmet-*.dmg and Pliss-*.dmg builds still live
+# in the releases dir and the appcast, and keep their old file names; only
+# new releases are named Dimble-*)
+perl -pi -e 's#(releases/download/)v[\w.-]+/((?:Nook|Pelmet|Pliss|Dimble)-([\w.-]+)\.dmg)#$1v$3/$2#g' \
+    "$RELEASES_DIR/appcast.xml"
+# Same for deltas: DimbleNN-MM.delta (PlissNN-MM, PelmetNN-MM, NookNN-MM.delta for
+# earlier releases) lives on the release of build NN,
+# whose tag comes from the item carrying <sparkle:version>NN.
+perl -0777 -pi -e '
+    my %tag;
+    while (/<item>(.*?)<\/item>/sg) {
+        my $item = $1;
+        my ($build) = $item =~ m#<sparkle:version>([^<]+)<#;
+        my ($short) = $item =~ m#<sparkle:shortVersionString>([^<]+)<#;
+        $tag{$build} = "v$short" if defined $build && defined $short;
+    }
+    s#(releases/download/)v[\w.-]+/((?:Nook|Pelmet|Pliss|Dimble)(\d+)-\d+\.delta)#exists $tag{$3} ? "$1$tag{$3}/$2" : $&#ge;
+' "$RELEASES_DIR/appcast.xml"
+echo "==> Appcast written to $RELEASES_DIR/appcast.xml (prior-version URLs re-pointed)"
 xcrun swift scripts/verify-update.swift "$APP/Contents/Info.plist" "$RELEASES_DIR/appcast.xml" "$DMG"
 
 echo ""

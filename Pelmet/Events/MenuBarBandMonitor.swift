@@ -614,7 +614,7 @@ final class MenuBarBandMonitor {
         let delay = max(appState.settings.revealTriggers.hoverDelay, AppTiming.hoverDelayFloor)
         hoverTimer?.invalidate()
         guard let ticket = hoverDwell.arm() else { return }
-        hoverTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, let appState = self.appState, self.hoverDwell.allowsReveal(ticket),
                       appState.settings.revealTriggers.hoverEnabled, !appState.isRevealed,
@@ -667,6 +667,10 @@ final class MenuBarBandMonitor {
     private var acceptedClickSequence = AcceptedClickSequence()
 
     private func clicked(_ event: NSEvent) {
+        // Forget the previous press's hit before any early return below, so a
+        // click that never reaches the hit-test cannot leave a stale owner
+        // for the next ⌘-drag to pick up.
+        if event.type == .leftMouseDown { lastHitOwner = nil }
         guard let appState else { return }
         let location = NSEvent.mouseLocation
         let screen = NSScreen.containing(location)

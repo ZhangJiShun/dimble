@@ -101,9 +101,11 @@ targets:
         NSHumanReadableCopyright: "© 2026 Gabriel Faucon"
         CFBundleName: Dimble
         CFBundleDisplayName: Dimble
-        SUFeedURL: https://fif7y.github.io/updates/pliss/appcast.xml
-        SUPublicEDKey: HyfGTw9yRC/C2CUxxamEhzxZuK+WWuG7WPI6F+BUOgE=
-        SUEnableAutomaticChecks: true
+        # fork 本地改动（同步上游时要保留）：关闭自动更新，否则上游源会用上游原版覆盖本地版本。
+        # 公钥留空 => SparkleController.isConfigured 为 false，更新器不启动、关于页不显示更新区。
+        SUFeedURL: ""
+        SUPublicEDKey: ""
+        SUEnableAutomaticChecks: false
         SUAutomaticallyUpdate: false
     settings:
       base:

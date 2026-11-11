@@ -284,24 +284,6 @@ final class ConcealGhostOverlay {
         return [NSApp.effectiveAppearance.name.rawValue.hashValue, hasher.finalize()]
     }
 
-    /// Mean luminance of the picture's columns over `primaryX` (debug: is a
-    /// picture of the bar under Notification Center's panel darker?).
-    static func meanLuma(_ snap: BarSnapshot, primaryX: ClosedRange<CGFloat>) -> Double {
-        let scale = CGFloat(snap.image.width) / snap.windowFrame.width
-        let x0 = max(0, Int((primaryX.lowerBound - snap.windowFrame.minX) * scale))
-        let x1 = min(snap.image.width, Int((primaryX.upperBound - snap.windowFrame.minX) * scale))
-        guard x1 > x0, let data = snap.image.dataProvider?.data, let ptr = CFDataGetBytePtr(data) else { return -1 }
-        let bpr = snap.image.bytesPerRow, bpp = snap.image.bitsPerPixel / 8
-        var sum = 0.0, n = 0.0
-        for y in stride(from: 0, to: snap.image.height, by: 4) {
-            for x in stride(from: x0, to: x1, by: 4) {
-                let o = y * bpr + x * bpp
-                sum += (Double(ptr[o]) + Double(ptr[o + 1]) + Double(ptr[o + 2])) / 3; n += 1
-            }
-        }
-        return n > 0 ? sum / n : -1
-    }
-
     /// Who moved between two signatures, by owner, for the log (#49: the
     /// changes were almost all one window in and out of the zone, and the
     /// count alone never said which).
@@ -1117,7 +1099,7 @@ final class ConcealGhostOverlay {
     /// are several. Nothing foreign over the strip: in front. Returns the
     /// surface it went below.
     @discardableResult
-    func orderBelowForeign() -> (owner: String, id: CGWindowID)? {
+    func orderBelowForeign() -> (id: CGWindowID, owner: String)? {
         guard !finished else { return nil }
         let f = window.frame
         let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
@@ -1164,7 +1146,7 @@ final class ConcealGhostOverlay {
     /// A foreign surface over the strip that has slipped below this cover
     /// (a click on the cover orders it in front of its level), by the
     /// window server's front-to-back `list`.
-    func foreignBelowMe(in list: [[String: Any]]) -> (owner: String, id: CGWindowID)? {
+    func foreignBelowMe(in list: [[String: Any]]) -> (id: CGWindowID, owner: String)? {
         guard window.isVisible, !finished else { return nil }
         let f = window.frame
         let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0

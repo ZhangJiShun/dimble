@@ -85,7 +85,7 @@ public enum ItemMover {
         // Hold briefly so the drag registers as a deliberate grab.
         for _ in 0..<3 {
             shield.reassert()
-            try? await Task.sleep(for: .milliseconds(60))
+            await pause(.milliseconds(60))
         }
         PelmetLog.log("mover: mid-drag cursor \(DragShield.cursorVisible ? "VISIBLE" : "hidden")")
         // Ease toward the target — single-jump drags are sometimes ignored,
@@ -114,15 +114,15 @@ public enum ItemMover {
         for point in path {
             post(.leftMouseDragged, at: point)
             shield.reassert()
-            try? await Task.sleep(for: .milliseconds(30))
+            await pause(.milliseconds(30))
         }
-        try? await Task.sleep(for: .milliseconds(120))
+        await pause(.milliseconds(120))
         post(.leftMouseUp, at: to)
         releaseCommand()
 
         // Warp home while the shield still hides the cursor — it reappears
         // where the user left it, never mid-flight.
-        try? await Task.sleep(for: .milliseconds(60))
+        await pause(.milliseconds(60))
         if let originalPosition {
             CGWarpMouseCursorPosition(originalPosition)
         }
@@ -159,18 +159,29 @@ public enum ItemMover {
         post(downType)
         for _ in 0..<2 {
             shield.reassert()
-            try? await Task.sleep(for: .milliseconds(30))
+            await pause(.milliseconds(30))
         }
         post(upType)
         if let originalPosition {
-            try? await Task.sleep(for: .milliseconds(60))
+            await pause(.milliseconds(60))
             CGWarpMouseCursorPosition(originalPosition)
         }
     }
 
+    /// The gaps inside a synthetic sequence (grab hold, per-step spacing, the
+    /// settle before the mouse-up). `Task.sleep` returns at once when the task
+    /// is cancelled, which would fire the rest of the events back to back and
+    /// drop the drag; the wait runs in a detached task instead, so a cancelled
+    /// caller still finishes the sequence at its own pace, mouse-up and the
+    /// ⌘ release included (the shield and the held ⌘ must not be left behind).
+    private static func pause(_ duration: Duration) async {
+        await Task.detached { try? await Task.sleep(for: duration) }.value
+    }
+
     /// Seconds since the user (or anyone) last produced a mouse event. Our own
-    /// synthetic events count too, but callers only reach here ≥450ms after
-    /// the previous drag (placementPreSettle), past the quiet gap already.
+    /// synthetic events count too, but callers only reach here after waiting
+    /// for the engine to go swap-quiet (`quiesced`) following the previous
+    /// drag, which is past the quiet gap already.
     private static func secondsSincePointerActivity() -> TimeInterval {
         let types: [CGEventType] = [
             .mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged,
@@ -185,7 +196,9 @@ public enum ItemMover {
         let deadline = Date.now.addingTimeInterval(maxWait)
         while Date.now < deadline {
             if secondsSincePointerActivity() >= EngineTiming.dragIdleQuietGap { return }
-            try? await Task.sleep(for: EngineTiming.dragIdlePoll)
+            // Cancelled: stop waiting (the shield protects the drag anyway)
+            // instead of spinning through the rest of the deadline.
+            do { try await Task.sleep(for: EngineTiming.dragIdlePoll) } catch { return }
         }
         PelmetLog.log("mover: pointer never went quiet — dragging shielded anyway")
     }
@@ -224,7 +237,9 @@ public enum SyntheticInput {
     }
 }
 
-private final class DragShield {
+// The tap thread and the caller touch its state in turn, ordered by `armed`
+// (activate waits for the thread) and by deactivate stopping the run loop.
+private final class DragShield: @unchecked Sendable {
 
     private var tap: CFMachPort?
     private var tapRunLoop: CFRunLoop?

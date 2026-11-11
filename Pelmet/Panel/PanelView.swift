@@ -14,6 +14,8 @@ import SwiftUI
 struct PanelTileArt {
     enum Image {
         /// Cut from the bar (ItemPictures); one-colour glyphs are tinted.
+        /// Fork: the presenter never builds this (tiles are `.icon`); kept so
+        /// upstream merges stay small.
         case picture(CGImage, size: CGSize, monochrome: Bool, highlighted: Bool)
         /// A configured launcher icon / symbol, or another item's stand-in
         /// until its menu bar picture lands.
@@ -792,7 +794,42 @@ private struct FoldTileLabel: View {
 
     var body: some View {
         let metrics = grid.metrics
+        if metrics.inline {
+            // The list: the +N in its cell, the name beside it, as every tile.
+            HStack(spacing: 0) {
+                foldGlyph
+                    .frame(width: metrics.wellSize.width, height: metrics.wellSize.height)
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(ink.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 8)
+            }
+            .frame(width: metrics.tileSize.width, height: metrics.tileSize.height, alignment: .leading)
+            .contentShape(Rectangle())
+        } else {
         VStack(spacing: metrics.labelGap) {
+            foldGlyph
+                .frame(width: metrics.wellSize.width, height: metrics.wellSize.height)
+            if grid.showsNames {
+                // A size under the names: "Always Hidden" is 77pt at 11,
+                // and the tile is 68 (Gab, 2026-10-10).
+                Text(title)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(ink.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: metrics.tileSize.width, height: metrics.labelHeight)
+            }
+        }
+        .frame(width: metrics.tileSize.width, height: metrics.tileSize.height, alignment: .top)
+        .contentShape(Rectangle())
+        }
+    }
+
+    private var foldGlyph: some View {
             ZStack {
                 if open {
                     Image(systemName: "chevron.up")
@@ -807,20 +844,6 @@ private struct FoldTileLabel: View {
             }
             .foregroundStyle(ink.secondary)
             .animation(.easeOut(duration: 0.15), value: open)
-            .frame(width: metrics.wellSize.width, height: metrics.wellSize.height)
-            if grid.showsNames {
-                // A size under the names: "Always Hidden" is 77pt at 11,
-                // and the tile is 68 (Gab, 2026-10-10).
-                Text(title)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(ink.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(width: metrics.tileSize.width, height: metrics.labelHeight)
-            }
-        }
-        .frame(width: metrics.tileSize.width, height: metrics.tileSize.height, alignment: .top)
-        .contentShape(Rectangle())
     }
 }
 

@@ -410,9 +410,13 @@ enum ApplyPass {
         // pass then finds behind the « (the idle extras it attaches can push
         // it there) needs the « expanded like a drawn one, or the pass plans
         // nothing and the count comes straight back (Figma, 2026-09-25).
-        let counted: Set<ItemID> = appState.snapshot.map {
-            Set(plan(for: appState, snapshot: $0, remembered: true).moves.map(\.item))
-        } ?? []
+        // Only the whole-bar scope reads it (`trappedFor` below); the others
+        // skip the whole-bar plan. Taken here, before the reveal waits.
+        var counted: Set<ItemID> = []
+        if case .wholeBar = scope, let snapshot = appState.snapshot {
+            counted = Set(plan(for: appState, snapshot: snapshot, remembered: true).moves.map(\.item))
+        }
+        let countedAtPress = counted
 
         // Hidden items have frames only under a reveal, and the plan is the
         // whole bar. Reveal everything and let the editor hold it. An own
@@ -524,7 +528,7 @@ enum ApplyPass {
         case .wholeBar:
             planFor = { self.plan(for: appState, snapshot: $0) }
             trappedFor = {
-                trappedEdited($0, edits: appState.settings.orderEdits, appState: appState).union(trapped($0, appState: appState).intersection(counted))
+                trappedEdited($0, edits: appState.settings.orderEdits, appState: appState).union(trapped($0, appState: appState).intersection(countedAtPress))
             }
         case .strays(let allowed):
             planFor = { self.plan(for: appState, snapshot: $0, strays: allowed) }

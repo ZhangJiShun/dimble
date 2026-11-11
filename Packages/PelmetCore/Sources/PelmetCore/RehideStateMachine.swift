@@ -20,8 +20,10 @@ public enum RevealReason: Hashable, Sendable {
     case barDrag
     /// The user asked to see one item in the real bar: Show in Menu Bar, a
     /// press on one of Pelmet's own extras, ⌘↩ in Search. A panel can't show
-    /// that, so routing always picks the bar. The machine treats it like
-    /// `.hotkey`: the pointer never entered the bar either.
+    /// that, so routing always picks the bar. Like `.hotkey`, the pointer never
+    /// entered the bar, but at Instant it is not left up until the pointer
+    /// visits: it arms a `itemInBarReach` (4 s) countdown so the icon goes
+    /// back on its own.
     ///
     /// Asked with NO sections, it is an item that comes out on its own: the
     /// machine then reads `.revealed(sections: [], .itemInBar)`, which owns

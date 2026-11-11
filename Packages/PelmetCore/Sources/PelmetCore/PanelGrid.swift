@@ -268,14 +268,6 @@ public struct PanelGrid: Equatable, Sendable {
             rows.joined().map { ($0.tile, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// The content plus the panel's padding on every side.
-    public var panelSize: CGSize {
-        guard contentSize != .zero else { return .zero }
-        return CGSize(
-            width: contentSize.width + 2 * metrics.padding,
-            height: contentSize.height + 2 * metrics.padding)
-    }
-
     public func placement(of tile: PanelTile) -> Placement? { positions[tile] }
     public func frame(of tile: PanelTile) -> CGRect? { positions[tile]?.frame }
 

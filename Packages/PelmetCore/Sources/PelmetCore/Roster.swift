@@ -18,16 +18,6 @@ public struct Roster: Codable, Equatable, Sendable {
         members[item.sectionKey] ?? members[item] ?? .visible
     }
 
-    /// Visible is the absence of an entry, so the roster never grows with
-    /// items that need no hiding.
-    public mutating func assign(_ key: ItemID, to section: Section) {
-        if section == .visible {
-            members.removeValue(forKey: key)
-        } else {
-            members[key] = section
-        }
-    }
-
     /// Bundles pinned on screen for the given reveal state: any observed item
     /// in `.visible` or a revealed section pins its whole bundle (hiding is
     /// per-bundle).

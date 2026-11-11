@@ -43,6 +43,8 @@ enum SettingsIndex {
                     ["hotkey", "shortcut"]),
             general("accentColor", String(localized: "Accent color"),
                     ["color", "colour", "theme", "tint", "purple", "blue", "green", "orange", "pink", "indigo", "custom", "choose your own"]),
+            general("statusIconStyle", String(localized: "Icon"),
+                    ["icon style", "chevron", "arrow", "symbol", "menu bar icon", "look"]),
             general("rightClickMenu", String(localized: "Right-click menu"),
                     ["context menu", "empty spot", "bar menu"]),
             general("language", String(localized: "Display language"),
@@ -73,6 +75,10 @@ enum SettingsIndex {
 
             menuBar("systemExtras", String(localized: "System extras"),
                     ["now playing", "camera", "airdrop", "focus", "timer", "collateral"]),
+            menuBar("dimbleItems", String(localized: "Dimble items"),
+                    ["extras", "media controls", "camera", "shortcut button", "system features", "now playing"]),
+            menuBar("appLaunchers", String(localized: "App launchers"),
+                    ["launcher", "add app", "app icon", "shortcut to app", "open app"]),
             menuBar("liveActivities", String(localized: "Show Live Activities"),
                     ["live activity", "live mode", "pill", "dynamic island", "timer", "call", "screen recording"]),
 
@@ -110,6 +116,8 @@ enum SettingsIndex {
         case .menuBar: String(localized: "Menu Bar")
         case .panel: String(localized: "Panel")
         case .search: String(localized: "Search")
+        case .displays: String(localized: "Displays")
+        case .about: String(localized: "About")
         default: tab.rawValue
         }
     }

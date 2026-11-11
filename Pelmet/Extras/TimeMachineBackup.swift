@@ -185,8 +185,33 @@ final class TimeMachineBackup {
             PelmetLog.log("time machine: \(arguments.joined(separator: " ")) failed — \(error.localizedDescription)")
             return nil
         }
+        // A backup disk that stops answering can hang `tmutil` for good,
+        // and `refreshing` would never clear: give up on it after a while.
+        let watchdog = process.terminateAfter(20)
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        watchdog.cancel()
+        if process.terminationReason == .uncaughtSignal {
+            PelmetLog.log("time machine: \(arguments.joined(separator: " ")) did not answer in time, ended")
+            return nil
+        }
         return String(data: data, encoding: .utf8)
+    }
+}
+
+extension Process {
+    /// Ends a child still running after `seconds` (SIGTERM, then SIGKILL two
+    /// seconds on). Cancel the returned item once it has exited.
+    nonisolated func terminateAfter(_ seconds: TimeInterval) -> DispatchWorkItem {
+        let process = self
+        let item = DispatchWorkItem {
+            guard process.isRunning else { return }
+            process.terminate()
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds, execute: item)
+        return item
     }
 }

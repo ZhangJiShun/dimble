@@ -213,7 +213,7 @@ import Testing
         // c was drawn in hidden, then moved to visible: the hidden edit still
         // lists it. Tidy must plan one run without c twice (this trapped).
         var roster = roster
-        roster.assign(c, to: .visible)
+        roster.members.removeValue(forKey: c)
         let plan = MovePlan.compute(
             bar: [d, a, b, c, chevron, v1],
             edits: OrderEdits(order: [.hidden: [c, a, b], .visible: [c, v1]]),
@@ -402,6 +402,28 @@ import Testing
         #expect(plan.moves.contains(Move(item: c, after: nil, before: a)))
         #expect(plan.moves.contains(Move(item: b, after: a, before: chevron)))
         #expect(plan.placements[b] == .chevronEdge)
+    }
+
+    @Test func aWrongSideIconTheEditorLeavesAloneIsNoBoundForADrawnStray() {
+        // v1 is Visible but sits left of the chevron, exempt from moving: its
+        // spot is not settled, so c (drawn after a) is bounded by the chevron,
+        // not by v1.
+        let plan = MovePlan.strayPlan(
+            bar: [a, v1, chevron, c], roster: roster, chevron: chevron, exempt: [v1],
+            edits: OrderEdits(order: [.hidden: [a, c]])
+        )
+        #expect(plan.moves == [Move(item: c, after: a, before: chevron)])
+    }
+
+    @Test func planEqualityComparesPlacements() {
+        let m = Move(item: a, after: nil, before: nil)
+        var x = MovePlan.Plan(moves: [m], skipped: [])
+        var y = x
+        x.placements[a] = .drawn
+        y.placements[a] = .chevronEdge
+        #expect(x != y)
+        y.placements[a] = .drawn
+        #expect(x == y)
     }
 }
 

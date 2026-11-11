@@ -49,6 +49,9 @@ enum StatusItemFader {
             fadeIn(item, shownAlpha: shownAlpha, stillCurrent: stillCurrent)
         } else {
             showFadingGhost(for: item)
+            // A fade-in still running would keep painting toward 1 and its
+            // completion would light the button again after the hide.
+            item.button?.layer?.removeAnimation(forKey: "pelmetAlphaFade")
             item.button?.alphaValue = 0
             DispatchQueue.main.asyncAfter(deadline: .now() + collapseDelay) { [weak item] in
                 guard stillCurrent() else { return }
@@ -83,6 +86,7 @@ enum StatusItemFader {
         DispatchQueue.main.asyncAfter(deadline: .now() + attachDelay) { [weak item] in
             guard stillCurrent(), let button = item?.button else { return }
             AlphaFade.run(button, to: shownAlpha, duration: fadeDuration, controlPoints: showCurve) {
+                guard stillCurrent() else { return }
                 button.alphaValue = shownAlpha  // re-sync the view property
                 republish(button)
             }
@@ -117,6 +121,7 @@ enum StatusItemFader {
         DispatchQueue.main.asyncAfter(deadline: .now() + glideDelay) { [weak item] in
             guard stillCurrent(), let button = item?.button else { return }
             AlphaFade.run(button, to: shownAlpha, duration: fadeDuration, controlPoints: showCurve) {
+                guard stillCurrent() else { return }
                 button.alphaValue = shownAlpha
                 republish(button)
             }

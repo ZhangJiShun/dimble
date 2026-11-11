@@ -30,7 +30,7 @@ import Testing
         budget.spend([a, b], roster: hidden)
         budget.spend([a, b], roster: hidden)
         var moved = hidden
-        moved.assign(a, to: .alwaysHidden)
+        moved.members[a] = .alwaysHidden
         let verdict = budget.check([a, b], roster: moved)
         #expect(verdict.ready == [a] && verdict.exhausted == [b])
     }
@@ -53,7 +53,7 @@ import Testing
         // and the same once more: each placement is the first attempt (live
         // test, 2026-10-13 20:14:36, 20:16:28, 20:17:52).
         var visible = hidden
-        visible.assign(a, to: .visible)
+        visible.members.removeValue(forKey: a)
         var budget = StrayBudget()
         for _ in 0..<3 {
             budget.observe(visible)
@@ -80,7 +80,7 @@ import Testing
         budget.spend([a], roster: hidden)
         budget.spend([a], roster: hidden)
         var away = hidden
-        away.assign(a, to: .visible)
+        away.members.removeValue(forKey: a)
         #expect(budget.check([a], roster: away).ready == [a])
         #expect(budget.check([a], roster: hidden).ready == [a])
     }

@@ -30,6 +30,17 @@ final class EditorDragSession {
     private(set) var payload: Payload?
     var target: Target?
     private var endWatcher: Task<Void, Never>?
+    /// Each strip's id order, taken the first time the drag asks for it and
+    /// dropped when the drag ends: `order()` rebuilds the whole icon board,
+    /// too dear to repeat on every mouse move.
+    @ObservationIgnored private var orderSnapshots: [PelmetCore.Section: [ItemID]] = [:]
+
+    func order(of section: PelmetCore.Section, compute: () -> [ItemID]) -> [ItemID] {
+        if let known = orderSnapshots[section] { return known }
+        let fresh = compute()
+        orderSnapshots[section] = fresh
+        return fresh
+    }
     /// The session with a tile lifted. Weak: a session whose editor went
     /// away mid-drag (the Settings shortcut switched tabs, ⌘W) takes its
     /// lift with it instead of leaving one that never ends.
@@ -54,6 +65,7 @@ final class EditorDragSession {
         self.payload = payload
         Self.lifting = self
         target = nil
+        orderSnapshots = [:]
         endWatcher?.cancel()
         // SwiftUI exposes no drag-end hook and the drop delegate only fires
         // on a landing; a drop outside every strip would leave the tile
@@ -78,6 +90,7 @@ final class EditorDragSession {
         endWatcher = nil
         payload = nil
         target = nil
+        orderSnapshots = [:]
         if Self.lifting === self { Self.lifting = nil }
     }
 
@@ -136,6 +149,10 @@ struct StripDropDelegate: DropDelegate {
     let frames: () -> [ItemID: CGRect]
     let onDrop: (EditorDragSession.Payload, Int) -> Void
 
+    private func snapshotOrder() -> [ItemID] {
+        session.order(of: section, compute: order)
+    }
+
     func validateDrop(info: DropInfo) -> Bool {
         if session.payload == nil { PelmetLog.log("editor-drag: \(section) refused — no session") }
         return session.payload != nil
@@ -161,7 +178,7 @@ struct StripDropDelegate: DropDelegate {
         }
         let index = session.target?.section == section
             ? session.target!.index
-            : EditorInsertion.index(at: info.location, order: order(), frames: frames())
+            : EditorInsertion.index(at: info.location, order: snapshotOrder(), frames: frames())
         PelmetLog.log("editor-drag: drop → \(section) index=\(index)")
         session.end(reason: "drop")
         onDrop(payload, index)
@@ -176,7 +193,7 @@ struct StripDropDelegate: DropDelegate {
         // highlight matters, not a slot.
         let index = session.payload == .newItemsChip
             ? 0
-            : EditorInsertion.index(at: info.location, order: order(), frames: frames())
+            : EditorInsertion.index(at: info.location, order: snapshotOrder(), frames: frames())
         let target = EditorDragSession.Target(section: section, index: index)
         if session.target != target { session.target = target }
     }

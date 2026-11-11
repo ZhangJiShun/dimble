@@ -116,7 +116,7 @@ public extension ItemID {
 
     /// A user-added separator. Section-managed like an extra; it moves
     /// through Apply like every own item.
-    public var isPelmetSeparator: Bool { pelmetItem == .separator }
+    var isPelmetSeparator: Bool { pelmetItem == .separator }
 
     /// One of Pelmet's app launchers.
     var isPelmetAppLauncher: Bool { pelmetItem == .appLauncher }

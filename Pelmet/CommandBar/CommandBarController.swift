@@ -379,8 +379,11 @@ final class CommandBarController {
     /// displays (their bars lay out the same way).
     private func anchorRight(on screen: NSScreen, appState: AppState) -> CGFloat {
         var right = screen.frame.maxX - GlassPanel.edgeMargin
-        if appState.settings.showStatusItem, let snapshot = appState.snapshot,
-           let frame = appState.pelmetChevronItem(in: snapshot)?.frame,
+        // The button window's live frame, as the panel uses; the snapshot's
+        // lags behind a reflow, so it is only the fallback.
+        if appState.settings.showStatusItem,
+           let frame = appState.chevronWindowFrame
+                ?? appState.snapshot.flatMap({ appState.pelmetChevronItem(in: $0)?.frame }),
            let primary = NSScreen.screens.first {
             let distance = primary.frame.maxX - frame.maxX
             if distance >= 0, distance < screen.frame.width / 2 {
@@ -1041,14 +1044,27 @@ final class CommandBarController {
     private func saveHistory() {
         guard let data = try? JSONEncoder().encode(history) else { return }
         UserDefaults.standard.set(data, forKey: Self.historyKey)
+        cachedPickCount = nil
         appState?.searchHistoryRevision += 1
     }
 
     /// Picks remembered, for the Settings row that resets them. Read from
-    /// what was saved: the demo learns too.
-    var historyPickCount: Int { Self.loadHistory().picks.count }
+    /// what was saved: the demo learns too. Decoded once per save, not on
+    /// every read: the Search pane asks from its body.
+    var historyPickCount: Int {
+        // The demo and the real bar each save: the shared revision says
+        // whether what this one cached is still what is on disk.
+        let revision = appState?.searchHistoryRevision ?? 0
+        if let cachedPickCount, cachedPickRevision == revision { return cachedPickCount }
+        let count = Self.loadHistory().picks.count
+        cachedPickCount = count
+        cachedPickRevision = revision
+        return count
+    }
+    private var cachedPickCount: Int?
+    private var cachedPickRevision = 0
 
-    /// Settings › General › Reset Search History.
+    /// Settings › Search › History › Reset.
     func resetHistory() {
         history.reset()
         saveHistory()

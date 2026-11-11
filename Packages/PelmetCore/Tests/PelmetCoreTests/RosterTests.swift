@@ -26,9 +26,9 @@ import Testing
 
     @Test func assignVisibleRemovesTheEntry() {
         var roster = Roster(members: [key("com.figma.Desktop"): .hidden])
-        roster.assign(key("com.figma.Desktop"), to: .visible)
+        roster.members.removeValue(forKey: key("com.figma.Desktop"))
         #expect(roster.members.isEmpty)
-        roster.assign(key("com.figma.Desktop"), to: .alwaysHidden)
+        roster.members[key("com.figma.Desktop")] = .alwaysHidden
         #expect(roster.members == [key("com.figma.Desktop"): .alwaysHidden])
     }
 

@@ -335,9 +335,10 @@ private struct EditorSectionView: View {
                 ForEach(Array(placedSlots.enumerated()), id: \.element.id) { index, slot in
                     switch slot {
                     case .tile(let item):
+                        let space = coordinateSpace
                         ItemTile(item: item, section: section, index: index)
                             .onGeometryChange(for: CGRect.self) { proxy in
-                                proxy.frame(in: .named(coordinateSpace))
+                                proxy.frame(in: .named(space))
                             } action: { frames[item.id] = $0 }
                     case .placeholder:
                         SlotPlaceholder()
@@ -666,7 +667,9 @@ private struct ItemTile: View {
                         .offset(x: -4, y: -4)
                         .help("Not in place yet — it hides with this section, but sits on the other side of the chevron until Apply moves it")
                 }
-                if isSystemIcon {
+                // A pinned system icon (clock, Control Center) already wears the
+                // lock in the same corner; the Apple mark would cover it.
+                if isSystemIcon && !isPinnedBySystem {
                     Image(systemName: "apple.logo")
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(.secondary)
@@ -1065,6 +1068,7 @@ private struct PelmetItemsStrip: View {
                     }
                 }
             }
+            .settingAnchor("dimbleItems")
 
             VStack(alignment: .leading, spacing: 12) {
                 PelmetItemRow(
@@ -1308,7 +1312,7 @@ private struct PelmetItemRow: View {
                     borderless: true
                 )
             }
-            Toggle("", isOn: Binding(get: { isOn }, set: onToggle))
+            Toggle("", isOn: Binding(get: { isOn }, set: { onToggle($0) }))
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .labelsHidden()
@@ -1367,6 +1371,7 @@ private struct AppLaunchersStrip: View {
                 symbol: "app.dashed", title: "App launchers",
                 caption: "Add any app to your menu bar"
             ) { EmptyView() }
+            .settingAnchor("appLaunchers")
 
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(launchers.enumerated()), id: \.element.id) { index, spec in

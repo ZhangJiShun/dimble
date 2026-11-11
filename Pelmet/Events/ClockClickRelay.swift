@@ -20,7 +20,8 @@ import PelmetEngine
 
 // Runs off the main actor: the tap callback fires on the relay thread and
 // the app target defaults to MainActor isolation (an inferred @MainActor
-// closure trapped there on first event). State is lock-guarded.
+// closure trapped there on first event). State is lock-guarded, the tap
+// handles included.
 nonisolated final class ClockClickRelay: @unchecked Sendable {
     private var tap: CFMachPort?
     private var tapSource: CFRunLoopSource?
@@ -68,8 +69,10 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
     /// setting). ⌥-clicks are relayed either way.
     func setEnabled(_ on: Bool) {
         lock.withLock { enabled = on }
-        if tap == nil { startTap() }
+        if currentTap == nil { startTap() }
     }
+
+    private var currentTap: CFMachPort? { lock.withLock { tap } }
 
     /// Called with the latest engine snapshot's clock frame (nil when the
     /// clock isn't in the walk — locked screen, empty AX).
@@ -92,7 +95,7 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
     /// See `PointerMoveTap.reviveIfDead`: a tap the system dropped keeps its
     /// object but stops hearing clicks. Rebuild it, keeping `enabled`.
     func reviveIfDead() {
-        guard let tap, !CFMachPortIsValid(tap) || !CGEvent.tapIsEnabled(tap: tap) else { return }
+        guard let tap = currentTap, !CFMachPortIsValid(tap) || !CGEvent.tapIsEnabled(tap: tap) else { return }
         let wasEnabled = lock.withLock { enabled }
         stop()
         lock.withLock { enabled = wasEnabled }
@@ -114,16 +117,20 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
     }
 
     func stop() {
-        lock.withLock { enabled = false }
+        // Take the handles under the lock and clear them there: a relay
+        // thread that has not reached its run loop yet then finds the tap
+        // gone and never starts (see startTap).
+        let (tap, source, runLoop) = lock.withLock {
+            enabled = false
+            defer { self.tap = nil; tapSource = nil; tapRunLoop = nil }
+            return (self.tap, tapSource, tapRunLoop)
+        }
         guard let tap else { return }
         CGEvent.tapEnable(tap: tap, enable: false)
-        if let tapRunLoop, let tapSource {
-            CFRunLoopRemoveSource(tapRunLoop, tapSource, .commonModes)
-            CFRunLoopStop(tapRunLoop)
+        if let runLoop, let source {
+            CFRunLoopRemoveSource(runLoop, source, .commonModes)
+            CFRunLoopStop(runLoop)
         }
-        self.tap = nil
-        tapSource = nil
-        tapRunLoop = nil
     }
 
     // MARK: - Tap
@@ -148,14 +155,25 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
             PelmetLog.log("clock: relay tap unavailable — clock clicks stay native")
             return
         }
-        self.tap = tap
+        lock.withLock { self.tap = tap }
+        // The thread owns this one tap; CFMachPort is not Sendable.
+        nonisolated(unsafe) let owned = tap
         let thread = Thread { [weak self] in
-            guard let self, let tap = self.tap else { return }
-            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            self.tapSource = source
-            self.tapRunLoop = CFRunLoopGetCurrent()
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
+            guard let self else { return }
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, owned, 0)
+            let runLoop = CFRunLoopGetCurrent()
+            // Publish and attach under the lock, so a `stop()` that already
+            // ran leaves nothing running and one that comes later finds the
+            // run loop to stop.
+            let alive: Bool = self.lock.withLock {
+                guard self.tap === owned else { return false }
+                tapSource = source
+                tapRunLoop = runLoop
+                CFRunLoopAddSource(runLoop, source, .commonModes)
+                return true
+            }
+            guard alive else { return }
+            CGEvent.tapEnable(tap: owned, enable: true)
             CFRunLoopRun()
         }
         thread.qualityOfService = .userInteractive
@@ -166,7 +184,7 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // Auto-disable notifications must re-enable or the tap dies silently.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            if let tap = currentTap { CGEvent.tapEnable(tap: tap, enable: true) }
             // Whatever passed while the tap was down included the up.
             lock.withLock { swallowUpUntil = nil }
             return Unmanaged.passUnretained(event)
@@ -265,13 +283,6 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
 
     // MARK: - Replay
 
-    /// The clock's AX press, for a click that landed in the dot zone: it
-    /// opens Notification Center without any mouse event, so the pointer
-    /// stays where the user put it (a click replayed at the clock's centre
-    /// dragged the cursor there, and the move posted to bring it back rang
-    /// the system alert — 2026-09-19). Works only with the assertion
-    /// dropped, exactly like the click (probed both ways 2026-09-19).
-    /// False when the element under the clock is not the clock.
     /// The physical left button as the HID layer sees it — swallowed events
     /// or not. Bounded: a stuck reading must not hold the blink open.
     @MainActor static func waitForButtonRelease(deadline: TimeInterval = 0.6) async {
@@ -417,6 +428,13 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
         return id.isEmpty ? kAXMenuBarItemRole : id
     }
 
+    /// The clock's AX press, for a click that landed in the dot zone: it
+    /// opens Notification Center without any mouse event, so the pointer
+    /// stays where the user put it (a click replayed at the clock's centre
+    /// dragged the cursor there, and the move posted to bring it back rang
+    /// the system alert — 2026-09-19). Works only with the assertion
+    /// dropped, exactly like the click (probed both ways 2026-09-19).
+    /// False when the element under the clock is not the clock.
     @MainActor static func press(_ element: AXUIElement) -> Bool {
         AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
     }
@@ -486,7 +504,11 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
     /// drags the cursor to its own location, so a dot-zone click replayed
     /// at the clock's centre left the pointer on the clock (Gab,
     /// 2026-09-19) — a move back restores it once the click is in.
-    @MainActor static func postClick(at point: CGPoint, pointer: CGPoint, flags: CGEventFlags = []) {
+    ///
+    /// Async so the hold between down and up does not block the main thread.
+    /// The hold runs in its own task: a cancelled caller still waits it out
+    /// and still sends the up, or the button would stay down.
+    @MainActor static func postClick(at point: CGPoint, pointer: CGPoint, flags: CGEventFlags = []) async {
         let source = CGEventSource(stateID: .hidSystemState)
         source?.userData = SyntheticInput.tag
         guard
@@ -504,7 +526,7 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
         down.flags = flags
         up.flags = flags
         down.post(tap: .cghidEventTap)
-        usleep(useconds_t(AppTiming.clockReplayHold * 1_000_000))
+        await Task { try? await Task.sleep(for: .seconds(AppTiming.clockReplayHold)) }.value
         up.post(tap: .cghidEventTap)
         if point != pointer {
             // A warp, not a posted move: a synthetic mouseMoved on the heels

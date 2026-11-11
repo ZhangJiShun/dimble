@@ -271,12 +271,15 @@ public actor ItemEnumerator {
             logDrop("no bundle id for leaf", pid: pid, role: role(of: element))
             return nil
         }
-        let candidates = [
-            copyAttribute(element, kAXTitleAttribute) as? String,
-            copyAttribute(element, kAXIdentifierAttribute) as? String,
-            copyAttribute(element, kAXDescriptionAttribute) as? String,
-        ]
-        var title = candidates.compactMap { $0?.isEmpty == false ? $0 : nil }.first
+        // In order, stopping at the first non-empty one: each read is an AX
+        // round trip, and most leaves answer on the first.
+        var title: String?
+        for attribute in [kAXTitleAttribute, kAXIdentifierAttribute, kAXDescriptionAttribute] {
+            if let text = copyAttribute(element, attribute) as? String, !text.isEmpty {
+                title = text
+                break
+            }
+        }
         // Time Machine's extra is a bare AXUnknown leaf with no title of its
         // own, so it collapsed onto "Item-0" and the editor called the tile
         // "System" (#19). SystemUIServer's extras bar still lists it: name

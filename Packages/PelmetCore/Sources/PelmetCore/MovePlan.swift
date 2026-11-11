@@ -185,6 +185,7 @@ public enum MovePlan {
         public var placements: [ItemID: Placement] = [:]
         public static func == (a: Plan, b: Plan) -> Bool {
             a.moves == b.moves && a.skipped.map(\.0) == b.skipped.map(\.0) && a.skipped.map(\.1) == b.skipped.map(\.1)
+                && a.placements == b.placements
         }
     }
 
@@ -254,10 +255,9 @@ public enum MovePlan {
         let trailingPinned = Set(bar.reversed().prefix { pinned.contains($0) })
         let visible = desired(.visible)
         run += visible.filter { !trailingPinned.contains($0) } + visible.filter(trailingPinned.contains)
-        let runs = [run]
 
         var moves: [Move] = []
-        for run in runs {
+        do {
             // The current bar order restricted to this run's members.
             let current = bar.filter(run.contains)
             let index = Dictionary(run.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
@@ -378,11 +378,13 @@ public enum MovePlan {
         }
 
         // A mover leaves its spot, so a bound is the nearest neighbour that stays.
+        // Wrong-side icons the policy leaves alone do not stay for good either
+        // (same rule as `usable`), so they are skipped too.
         func staying(from item: ItemID, step: Int) -> ItemID? {
             guard var i = bar.firstIndex(of: item) else { return nil }
             i += step
             while bar.indices.contains(i) {
-                if !movable.contains(bar[i]) { return bar[i] }
+                if !movable.contains(bar[i]) && !misplaced.contains(bar[i]) { return bar[i] }
                 i += step
             }
             return nil

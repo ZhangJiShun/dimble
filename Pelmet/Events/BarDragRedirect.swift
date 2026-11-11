@@ -40,7 +40,7 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
     @MainActor
     func arm(zone: CGRect, anchor: CGPoint) -> Bool {
         reviveIfDead()
-        if tap == nil, !start() { return false }
+        if currentTap == nil, !start() { return false }
         let height = NSScreen.screens.first?.frame.height ?? 0
         lock.withLock {
             self.zone = CGRect(x: zone.minX, y: height - zone.maxY, width: zone.width, height: zone.height)
@@ -50,7 +50,7 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
             pointer = nil
             armed = true
         }
-        if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+        if let tap = currentTap { CGEvent.tapEnable(tap: tap, enable: true) }
         return true
     }
 
@@ -82,7 +82,7 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
     @MainActor
     func disarm() {
         lock.withLock { armed = false }
-        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let tap = currentTap { CGEvent.tapEnable(tap: tap, enable: false) }
     }
 
     /// A tap the system dropped (Accessibility revoked and granted again)
@@ -97,15 +97,20 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
         _ = start()
     }
 
+    private var currentTap: CFMachPort? { lock.withLock { tap } }
+
     func stop() {
-        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let tapRunLoop, let tapSource {
-            CFRunLoopRemoveSource(tapRunLoop, tapSource, .commonModes)
-            CFRunLoopStop(tapRunLoop)
+        // Handles taken and cleared under the lock: a thread that has not
+        // reached its run loop yet finds the tap gone and never starts.
+        let (tap, source, runLoop) = lock.withLock {
+            defer { self.tap = nil; tapSource = nil; tapRunLoop = nil }
+            return (self.tap, tapSource, tapRunLoop)
         }
-        tap = nil
-        tapSource = nil
-        tapRunLoop = nil
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let runLoop, let source {
+            CFRunLoopRemoveSource(runLoop, source, .commonModes)
+            CFRunLoopStop(runLoop)
+        }
     }
 
     private func start() -> Bool {
@@ -127,13 +132,23 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
             return false
         }
         CGEvent.tapEnable(tap: tap, enable: false)
-        self.tap = tap
+        lock.withLock { self.tap = tap }
+        // The thread owns this one tap; CFMachPort is not Sendable.
+        nonisolated(unsafe) let owned = tap
         let thread = Thread { [weak self] in
-            guard let self, let tap = self.tap else { return }
-            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            self.tapSource = source
-            self.tapRunLoop = CFRunLoopGetCurrent()
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            guard let self else { return }
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, owned, 0)
+            let runLoop = CFRunLoopGetCurrent()
+            // Publish and attach under the lock, so a `stop()` that already
+            // ran leaves nothing running.
+            let alive: Bool = self.lock.withLock {
+                guard self.tap === owned else { return false }
+                tapSource = source
+                tapRunLoop = runLoop
+                CFRunLoopAddSource(runLoop, source, .commonModes)
+                return true
+            }
+            guard alive else { return }
             CFRunLoopRun()
         }
         thread.qualityOfService = .userInteractive
@@ -144,7 +159,7 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if lock.withLock({ armed }), let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            if lock.withLock({ armed }), let tap = currentTap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
         let anchor: CGPoint? = lock.withLock {
@@ -160,7 +175,7 @@ nonisolated final class BarDragRedirect: @unchecked Sendable {
         }
         // Off until the next arm, even if the main thread never hears of it.
         // An arm that came in between may have enabled it first: on again.
-        if type == .leftMouseUp, let tap {
+        if type == .leftMouseUp, let tap = currentTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             if lock.withLock({ armed }) { CGEvent.tapEnable(tap: tap, enable: true) }
         }

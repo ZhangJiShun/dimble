@@ -45,16 +45,8 @@ public struct SearchHistory: Codable, Equatable, Sendable {
         picks.contains { $0.id == id }
     }
 
-    /// Recency-weighted pick count: a pick today is 1, two weeks ago 0.5.
-    public func frecency(of id: String, at now: Date) -> Double {
-        var total = 0.0
-        for pick in picks where pick.id == id {
-            total += Self.weight(of: pick, at: now)
-        }
-        return total
-    }
-
-    /// Frecency of every picked id in one pass; the ranker looks rows up in
+    /// Recency-weighted pick count of every picked id (a pick today is 1, two
+    /// weeks ago 0.5), in one pass; the ranker looks rows up in
     /// this instead of scanning the picks once per candidate.
     public func frecencies(at now: Date) -> [String: Double] {
         var table: [String: Double] = [:]

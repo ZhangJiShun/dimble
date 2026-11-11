@@ -22,7 +22,8 @@ class GlassPanel: NSPanel {
     /// (see `setGlassHeight`). If a live look still shows a dark ring at the edge,
     /// this is the one switch: the glass reads fine without a shadow.
     static let usesSystemShadow = true
-    static let gapBelowBar: CGFloat = 4
+    /// The gap under the bar for the command bar (`topUnderBar`); the panel has its own, `PanelPresenter.gapBelowBar`.
+    static let commandBarGap: CGFloat = 4
     static let edgeMargin: CGFloat = 8
 
     /// `content` fills the glass; it is the caller's to size and lay out.
@@ -220,9 +221,9 @@ class GlassPanel: NSPanel {
         return height
     }
 
-    /// Top edge of a panel hung under the bar on `screen` (Cocoa y).
+    /// Top edge of the command bar hung under the bar on `screen` (Cocoa y).
     static func topUnderBar(of screen: NSScreen) -> CGFloat {
-        screen.frame.maxY - barHeight(of: screen) - gapBelowBar
+        screen.frame.maxY - barHeight(of: screen) - commandBarGap
     }
 }
 

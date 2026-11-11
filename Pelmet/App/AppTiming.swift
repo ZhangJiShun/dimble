@@ -44,11 +44,6 @@ enum AppTiming {
     /// far left of the idle one: the extras and the pills the lift lets
     /// back push the icons left (the capture stops at the notch).
     static let liftPictureLeftRoom: CGFloat = 200
-    /// Notification Center's panel slides in over ~100ms from Pelmet's
-    /// press; the blink cover crossfades from the bare still to the
-    /// under-panel one over that slide, starting at the press.
-    static let panelSlideIn: Duration = .milliseconds(0)
-    static let panelSlideInFade: CFTimeInterval = 0.22
     /// Notification Center's leading edge, points in from the display's
     /// right edge, at each 1/60s of its entrance: filmed at 60fps with the
     /// blink uncovered, three runs averaged (Gab's built-in, 2026-09-22
@@ -60,9 +55,6 @@ enum AppTiming {
     /// still, 130ms with the click's own picture shaded (Gab, 2026-09-22
     /// 18:05).
     static let panelEntranceDelay: CFTimeInterval = 0.13
-    /// Where the panel's leading edge comes to rest, in from the display's
-    /// right edge, as the bar's shade shows it (1390pt on an 1800pt bar).
-    static let panelShadeInset: CGFloat = 410
     /// The panel's leading edge as the glass shows it: a ~70pt ramp
     /// (60fps profile, 2026-09-22 14:28).
     static let panelEdgeSoftness: CGFloat = 110
@@ -303,15 +295,9 @@ enum AppTiming {
     /// long, at most, for its own menu to be gone (or to show) before the
     /// item goes back, so it is not concealed under a menu that is opening.
     static let pressYieldWait: TimeInterval = 0.8
-    /// The cover hides the reveal and the click, then lifts so the real icon
-    /// shows highlighted with its menu dropping from it. Not when the « was
-    /// expanded for the press: the visible run sits ~38pt from where the
-    /// cover's picture has it, and lifting would jump it. Flip to keep the
-    /// cover up through the menu (the final conceal raises its own).
-    /// Dimble: off. A press never shows the real icon, the panel is where
-    /// icons live; the cover stays up through the menu or window and is
-    /// kept alive `pressCoverHoldStep` at a time while the relay waits.
-    static let pressCoverLiftsAfterClick = false
+    /// A press keeps its cover up through the menu or window the click
+    /// opened, `pressCoverHoldStep` at a time while the relay waits; the real
+    /// icon is never shown, the panel is where icons live.
     static let pressCoverHoldStep: TimeInterval = 1.5
 
     /// The hidden-icons panel, from the mock: in with an 8pt drop as it

@@ -30,6 +30,9 @@ final class ClockTimerStatus {
     private var recovering = false
     private var pending: [(message: String, date: Date)] = []
     private var restarts = 0
+    /// When the stream last ended, until the replay on the way back has
+    /// covered it (see FocusStatus).
+    private var gapStart: Date?
     /// Pelmet quitting takes the child with it (see FocusStatus).
     private var termination: NSObjectProtocol?
     /// Wakes when a timer is past its bound (`ClockTimers.expire`).
@@ -37,13 +40,14 @@ final class ClockTimerStatus {
 
     func start() {
         stopped = false
+        gapStart = nil
         reapOrphans()
         if termination == nil {
             termination = NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification, object: nil, queue: .main
             ) { [weak self] _ in MainActor.assumeIsolated { self?.stop() } }
         }
-        recover()
+        recover(since: nil)
         openStream()
     }
 
@@ -54,6 +58,8 @@ final class ClockTimerStatus {
         (stream?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
         stream?.terminate()
         stream = nil
+        if let termination { NotificationCenter.default.removeObserver(termination) }
+        termination = nil
     }
 
     /// Any `log stream` on our predicate re-parented to launchd is ours.
@@ -68,15 +74,19 @@ final class ClockTimerStatus {
 
     // MARK: Boot
 
-    private func recover() {
+    /// With `since` (a stream that ended and is being reopened) only the
+    /// gap is read, folded into the timers already known.
+    private func recover(since: Date?) {
         recovering = true
+        let window = since.map { "\(min(24 * 60 * 60, Int(Date().timeIntervalSince($0)) + 5))s" } ?? "24h"
+        let known = timers
         Task.detached(priority: .utility) { [weak self] in
-            let lines = FocusStatus.run(["show", "--last", "24h", "--style", "ndjson", "--predicate", ClockTimers.predicate])
-            var replayed = ClockTimers()
+            let lines = FocusStatus.run(["show", "--last", window, "--style", "ndjson", "--predicate", ClockTimers.predicate])
+            var replayed = since == nil ? ClockTimers() : known
             for entry in lines.compactMap(Self.entry(in:)) { replayed.read(entry.message, at: entry.date) }
             await MainActor.run { [weak self] in
                 guard let self, !self.stopped else { return }
-                PelmetLog.log("clocktimer: boot \(Self.describe(replayed.current))")
+                PelmetLog.log("clocktimer: \(since == nil ? "boot" : "replayed the gap") \(Self.describe(replayed.current))")
                 for entry in self.pending { replayed.read(entry.message, at: entry.date) }
                 self.pending = []
                 self.recovering = false
@@ -94,7 +104,9 @@ final class ClockTimerStatus {
         process.arguments = ["stream", "--style", "ndjson", "--predicate", ClockTimers.predicate]
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+        let errors = Pipe()
+        process.standardError = errors
+        let startedAt = Date()
         let lines = FocusStatus.LineSplitter()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
@@ -112,27 +124,43 @@ final class ClockTimerStatus {
             }
         }
         process.terminationHandler = { [weak self] _ in
-            Task { @MainActor [weak self] in self?.streamEnded() }
+            // Why `log` quit, when it says (it has a "Must be admin" refusal).
+            let why = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .split(separator: "\n").first.map(String.init) ?? ""
+            let ranFor = Date().timeIntervalSince(startedAt)
+            Task { @MainActor [weak self] in self?.streamEnded(why, ranFor: ranFor) }
         }
         do {
             try process.run()
             stream = process
         } catch {
+            // Retried like a stream that ended.
             PelmetLog.log("clocktimer: log stream failed — \(error.localizedDescription)")
+            streamEnded("could not start (\(error.localizedDescription))", ranFor: 0)
         }
     }
 
     /// logd restarts (or a kill) end the child; back off like FocusStatus.
-    private func streamEnded() {
+    private func streamEnded(_ why: String, ranFor: TimeInterval) {
         stream = nil
         guard !stopped else { return }
+        // A standard account: `log stream` is refused, and will be every
+        // time. Said once, not retried.
+        if why.contains("Must be admin") {
+            PelmetLog.log("clocktimer: log stream refused (\(why.prefix(120))) — not trying again")
+            return
+        }
+        if gapStart == nil { gapStart = Date() }
+        if ranFor >= FocusStatus.stableRun { restarts = 0 }
         restarts += 1
         let delay = min(60, 2 << min(restarts, 5))
-        PelmetLog.log("clocktimer: log stream ended, retry in \(delay)s")
+        PelmetLog.log("clocktimer: log stream ended\(why.isEmpty ? "" : " (\(why.prefix(120)))"), retry in \(delay)s")
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self, !self.stopped, self.stream == nil else { return }
-            self.recover()
+            let since = self.gapStart
+            self.gapStart = nil
+            self.recover(since: since)
             self.openStream()
         }
     }
@@ -171,9 +199,6 @@ final class ClockTimerStatus {
               let stamp = object["timestamp"] as? String
         else { return nil }
         // `log`'s ndjson timestamps: "2026-10-29 10:29:03.436123-0400".
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZ"
-        return formatter.date(from: stamp).map { (message, $0) }
+        return FocusStatus.logTimestamps.date(from: stamp).map { (message, $0) }
     }
 }

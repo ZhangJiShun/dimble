@@ -7,8 +7,9 @@
 // engine's conceal. An item behind the native « is reached by expanding it
 // for the press.
 //
-// The cover hides the reveal and the click, then lifts: the real icon shows
-// highlighted with its menu dropping from it (`pressCoverLiftsAfterClick`).
+// The cover hides the reveal and the click and stays up through the menu or
+// window the click opened (kept alive `pressCoverHoldStep` at a time); the
+// real icon is never shown. The panel is where icons live.
 //
 // Always a click, never an AX press: a press left a SwiftUI menu bar extra's
 // button stuck highlighted (a capsule behind the glyph that survived
@@ -282,13 +283,8 @@ final class ItemPress {
                 clickedElsewhere ? ", on display \($0)'s bar" : ", on the main bar (display \($0)'s had no copy to click)"
             } ?? ""
             PelmetLog.log("press: \(key.rawValue) clicked at \(ms())ms\(toggle == nil ? "" : " (« expanded)")\(bar)")
-            // The reveal and the click are behind the cover; from here the
-            // real icon shows, highlighted, with its menu dropping from it.
-            if AppTiming.pressCoverLiftsAfterClick, toggle == nil, let lifting = cover {
-                lifting.dismiss()
-                cover = nil
-                PelmetLog.log("press: \(key.rawValue) cover lifted at \(ms())ms")
-            }
+            // The reveal and the click are behind the cover, and it stays up
+            // until the menu is gone.
             let hold: () -> Void = { [cover] in cover?.keepUp(for: AppTiming.pressCoverHoldStep) }
             let sign = await waitForSign(over: before, pid: target.pid, geometry: geometry, frontCounts: !wasFront, run: run, hold: hold)
             PelmetLog.log("press: \(key.rawValue) \(sign.map { "showed \($0.rawValue)" } ?? "showed nothing") at \(ms())ms")

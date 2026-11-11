@@ -148,20 +148,19 @@ private func ids(_ matches: [SearchMatch]) -> [String] {
     @Test func frecencyHalvesEveryTwoWeeks() {
         var history = SearchHistory()
         history.record(id: "a", query: "", at: t0)
-        #expect(abs(history.frecency(of: "a", at: t0) - 1) < 1e-9)
-        #expect(abs(history.frecency(of: "a", at: t0 + 14 * day) - 0.5) < 1e-9)
-        #expect(abs(history.frecency(of: "a", at: t0 + 28 * day) - 0.25) < 1e-9)
-        #expect(history.frecency(of: "other", at: t0) == 0)
+        #expect(abs((history.frecencies(at: t0)["a"] ?? 0) - 1) < 1e-9)
+        #expect(abs((history.frecencies(at: t0 + 14 * day)["a"] ?? 0) - 0.5) < 1e-9)
+        #expect(abs((history.frecencies(at: t0 + 28 * day)["a"] ?? 0) - 0.25) < 1e-9)
+        #expect((history.frecencies(at: t0)["other"] ?? 0) == 0)
         // Picks add up, newest weighing most.
         history.record(id: "a", query: "", at: t0 + 14 * day)
-        #expect(abs(history.frecency(of: "a", at: t0 + 14 * day) - 1.5) < 1e-9)
-        #expect(history.frecencies(at: t0 + 14 * day)["a"] == history.frecency(of: "a", at: t0 + 14 * day))
+        #expect(abs((history.frecencies(at: t0 + 14 * day)["a"] ?? 0) - 1.5) < 1e-9)
     }
 
     @Test func aFuturePickCountsAsJustMade() {
         var history = SearchHistory()
         history.record(id: "a", query: "", at: t0 + day)
-        #expect(history.frecency(of: "a", at: t0) == 1)
+        #expect((history.frecencies(at: t0)["a"] ?? 0) == 1)
     }
 
     @Test func capKeepsTheNewestPicks() {
@@ -204,7 +203,7 @@ private func ids(_ matches: [SearchMatch]) -> [String] {
         history.record(id: "a", query: "a", at: t0 + 1)
         history.reset()
         #expect(history.picks.isEmpty)
-        #expect(history.frecency(of: "a", at: t0) == 0)
+        #expect((history.frecencies(at: t0)["a"] ?? 0) == 0)
         #expect(history.latchedID(for: "a") == nil)
     }
 
@@ -218,7 +217,7 @@ private func ids(_ matches: [SearchMatch]) -> [String] {
         #expect(!history.hasPicks(for: "a"))
         #expect(history.hasPicks(for: "b"))
         #expect(history.latchedID(for: "x") == nil)
-        #expect(history.frecency(of: "a", at: t0 + 3) == 0)
+        #expect((history.frecencies(at: t0 + 3)["a"] ?? 0) == 0)
     }
 
     @Test func roundTripsThroughJSON() throws {
