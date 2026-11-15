@@ -2265,8 +2265,8 @@ final class AppState {
 
     /// The Live Activities watcher saw an activity start or end: `LiveMirror`
     /// enters or leaves when the bar allows, if the setting is on.
-    func liveActivitiesChanged(running: Bool, count: Int = 0, real: Int = 0) {
-        liveMirror.activitiesChanged(running: running, count: count, real: real)
+    func liveActivitiesChanged(running: Bool, count: Int = 0) {
+        liveMirror.activitiesChanged(running: running, count: count)
     }
 
     /// The pills live mode has mirrors for, by the name macOS gives each one
@@ -2294,6 +2294,15 @@ final class AppState {
             let forced = UserDefaults.standard.bool(forKey: key)
             traits.pin(trait, forced)
             PelmetLog.log("ostraits: \(trait.rawValue) pinned to \(forced) by \(key)")
+        }
+        // Local fork: upstream starts from macOS 27.3's behaviour and learns
+        // otherwise only after 10s with no pill, which a dictation never
+        // lasts. Below 27.3 Apple's camera and mic pill is taken off the bar
+        // under an assertion, so a mic session must not send live mode after
+        // it (it filmed the bar and left a mismatched cover each time).
+        if !ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 27, minorVersion: 3, patchVersion: 0)),
+           let line = traits.learn(.systemPillSurvivesAssertion, false, why: "this macOS is older than 27.3") {
+            PelmetLog.log(line)
         }
         return traits
     }()

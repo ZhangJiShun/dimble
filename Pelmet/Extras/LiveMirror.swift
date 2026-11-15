@@ -644,14 +644,6 @@ final class LiveMirror {
     /// What the watcher last said, whatever the setting: turning the setting
     /// on picks it up (`settingChanged`).
     private var reported = (running: false, count: 0)
-    /// How many of those are real Live Activities (not Apple's camera and mic
-    /// pill, which `count` includes), and whether any was running during this
-    /// run. With none, the run was only for the mic or camera.
-    private var reportedReal = 0
-    private var runHadRealActivity = false
-    /// When the assertion came down in this run: how long the bar was left
-    /// bare for a pill that may never come.
-    private var assertionDownAt: Date?
     private var loop: Task<Void, Never>?
     private var lastChevron: NSRect?
     private var coverLifted = false
@@ -809,10 +801,8 @@ final class LiveMirror {
         }
     }
 
-    func activitiesChanged(running: Bool, count: Int = 0, real: Int = 0) {
+    func activitiesChanged(running: Bool, count: Int = 0) {
         reported = (running, count)
-        reportedReal = real
-        if real > 0 { runHadRealActivity = true }
         // With the setting off the watcher may still run (the item follows
         // it): live mode takes no part.
         follow(running: running && enabled, count: enabled ? count : 0, why: "activity ended")
@@ -839,7 +829,6 @@ final class LiveMirror {
 
     private func follow(running: Bool, count: Int, why: String) {
         if running != wanted { PelmetLog.log("livemirror: activities \(running ? "running" : "none") — wanted \(running)") }
-        if running, !wanted { runHadRealActivity = reportedReal > 0 }
         wanted = running
         // An activity started or ended: the pills are looked for every tick for
         // a few seconds (its pill shows a moment after the log line).
@@ -1916,7 +1905,6 @@ final class LiveMirror {
         await appState.engine.holdLift(true)
         let dropped = ms()
         PelmetLog.log("livemirror: assertion down at \(dropped)ms")
-        assertionDownAt = Date()
 
         // 3. Wait for the « to stop moving and the pill (with its children) to be there.
         let by = Date().addingTimeInterval(4)
@@ -3534,41 +3522,12 @@ final class LiveMirror {
 
     // MARK: Exit
 
-    /// A run that was only for the mic or camera (no real Live Activity) ends
-    /// after the bar was left bare for a while and Apple's pill never showed:
-    /// this macOS takes it off the bar under an assertion (27.2 and earlier),
-    /// so there is nothing to mirror. Without this, only a session longer than
-    /// the no-pill grace could say so, and a dictation lasts a few seconds:
-    /// every one entered live mode again, filmed the bar, lit the recording
-    /// indicator and left a cover that never matches the shadows under the bar.
-    private static let shortRunLearnAfter: TimeInterval = 0.8
-    /// Two runs in a row, not one: a pill that is only late on a macOS that
-    /// does keep it would otherwise be learnt away, and with it the privacy
-    /// indicator the cover is there to spare.
-    private static let shortRunsNeeded = 2
-    private var bareMicRuns = 0
-
-    private func learnNoSystemPill(_ reason: String) {
-        defer { assertionDownAt = nil }
-        guard reason == "activity ended", !runHadRealActivity, let down = assertionDownAt else { return }
-        let sawPill = sides.contains { $0.mirrors.contains { $0.misses < 3 && !$0.provisional } }
-        if sawPill { bareMicRuns = 0; return }
-        let bare = Date().timeIntervalSince(down)
-        guard bare >= Self.shortRunLearnAfter else { return }
-        bareMicRuns += 1
-        PelmetLog.log("livemirror: a mic or camera run ended after \(String(format: "%.1f", bare))s with no pill (\(bareMicRuns) of \(Self.shortRunsNeeded))")
-        guard bareMicRuns >= Self.shortRunsNeeded else { return }
-        appState?.learn(.systemPillSurvivesAssertion, false,
-                        why: "\(bareMicRuns) mic or camera sessions in a row ended with the bar bare and no pill came")
-    }
-
     func exit(_ reason: String) async {
         guard let appState, isActive, !exiting else { return }
         exiting = true
         changes &+= 1
         defer { exiting = false }
         hiddenOut = nil
-        learnNoSystemPill(reason)
         let started = Date()
         PelmetLog.log("livemirror: exit — \(reason)")
         // The mirrors leave first, the way the bar's own items do (the reveal

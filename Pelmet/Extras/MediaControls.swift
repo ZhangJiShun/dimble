@@ -1302,7 +1302,7 @@ final class ExtrasManager {
     private func liveActivityChanged() {
         let system = systemPillTakesASlot
         let count = (liveActivityStatus?.active.count ?? 0) + (system ? 1 : 0)
-        appState?.liveActivitiesChanged(running: count > 0, count: count, real: liveActivityStatus?.active.count ?? 0)
+        appState?.liveActivitiesChanged(running: count > 0, count: count)
         guard let spec = specs.values.first(where: { $0.kind == .liveActivity }),
               let item = items[spec.id] else { return }
         let active = !(liveActivityStatus?.active.isEmpty ?? true)
