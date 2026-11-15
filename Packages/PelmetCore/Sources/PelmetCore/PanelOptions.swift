@@ -43,6 +43,9 @@ public struct PanelOptions: Codable, Equatable, Sendable {
     }
 
     public var style: Style = .tiles
+    /// Keep the chevron anchor by default; only empty-bar clicks can opt into centering.
+    public var centersOnClick: Bool = false
+
     /// A name under every tile (the tiles style).
     public var showsNames: Bool = false
     /// Dimmed tiles for apps in a section that aren't running, a click
@@ -63,6 +66,11 @@ public struct PanelOptions: Codable, Equatable, Sendable {
     /// Where the fold was left; read only for `.asLeft`.
     public var alwaysHiddenOpen: Bool = false
     public var alwaysHiddenFold: AlwaysHiddenFold = .tile
+    /// A cog under the tiles, in the panel's bottom-right corner, that opens
+    /// Settings (#95). Off by default: the panel's own right-click menu
+    /// already carries the row, and a control drawn at rest costs a line of
+    /// the panel's height whether or not anyone reaches for it.
+    public var showsSettingsButton: Bool = false
 
     /// What Auto means: the widest a row grows. The grid is never wider than
     /// its icons need, so a panel with three icons is three columns.
@@ -92,7 +100,7 @@ public struct PanelOptions: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case style, columnsList, showsNames, columnsWithNames, columnsCompact, columnsTight, separatorsBreakRows, alwaysHidden, alwaysHiddenOpen
-        case alwaysHiddenFold, showsClosedApps
+        case alwaysHiddenFold, showsClosedApps, showsSettingsButton, centersOnClick
     }
 
     public init(from decoder: Decoder) throws {
@@ -107,6 +115,7 @@ public struct PanelOptions: Codable, Equatable, Sendable {
         }
         style = c.field(Style.self, .style, defaults.style)
         columnsList = count(.columnsList)
+        centersOnClick = c.field(Bool.self, .centersOnClick, defaults.centersOnClick)
         showsNames = c.field(Bool.self, .showsNames, defaults.showsNames)
         columnsWithNames = count(.columnsWithNames)
         columnsCompact = count(.columnsCompact)
@@ -120,6 +129,7 @@ public struct PanelOptions: Codable, Equatable, Sendable {
         alwaysHiddenOpen = c.field(Bool.self, .alwaysHiddenOpen, defaults.alwaysHiddenOpen)
         alwaysHiddenFold = c.field(AlwaysHiddenFold.self, .alwaysHiddenFold, defaults.alwaysHiddenFold)
         showsClosedApps = c.field(Bool.self, .showsClosedApps, defaults.showsClosedApps)
+        showsSettingsButton = c.field(Bool.self, .showsSettingsButton, defaults.showsSettingsButton)
     }
 
     /// Written by hand so `columnsTight` is always present, null for Auto: a
@@ -137,5 +147,7 @@ public struct PanelOptions: Codable, Equatable, Sendable {
         try c.encode(alwaysHidden, forKey: .alwaysHidden)
         try c.encode(alwaysHiddenOpen, forKey: .alwaysHiddenOpen)
         try c.encode(alwaysHiddenFold, forKey: .alwaysHiddenFold)
+        try c.encode(showsSettingsButton, forKey: .showsSettingsButton)
+        try c.encode(centersOnClick, forKey: .centersOnClick)
     }
 }

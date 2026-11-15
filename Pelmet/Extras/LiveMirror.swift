@@ -45,6 +45,9 @@ nonisolated struct PillCopy: @unchecked Sendable {
     let name: String
     /// Which of the agent's bars this copy came from (see `copies`).
     let bar: Int
+    /// macOS's own pill, not an app's activity: mirrored like the rest, but
+    /// never listed in Settings and never turned off there.
+    var system = false
 }
 
 
@@ -178,6 +181,11 @@ nonisolated struct ClockState {
 
 nonisolated enum PillProbe {
     static let identifierPrefix = "live-activity-pill-"
+    /// macOS 27.3 moved Apple's camera and mic pill onto this same machinery
+    /// — `av-module-pill-<uuid>`, same shape, same lane — and stopped taking
+    /// it off the bar under an assertion. Mirrored like any other pill, or
+    /// the held cover paints over the privacy indicator until a reveal.
+    static let systemPillPrefix = "av-module-pill-"
     /// Every distinct pill on a display, left to right: macOS shows one pill
     /// per running activity, each with its own AX element (and a copy per bar).
     static func pills(in bounds: CGRect) -> [PillCopy] {
@@ -192,13 +200,9 @@ nonisolated enum PillProbe {
 
     /// A pill's identity is its AXDescription ("Sports", "myVW"), the one
     /// thing that names the activity in AX; a second pill with the same
-    /// description gets " #2".
+    /// description gets " #2" (`PillKeys`, in bar order).
     static func keys(of pills: [PillCopy]) -> [String] {
-        var counts: [String: Int] = [:]
-        return pills.map { pill in
-            counts[pill.name, default: 0] += 1
-            return counts[pill.name]! == 1 ? pill.name : "\(pill.name) #\(counts[pill.name]!)"
-        }
+        PillKeys.keys(for: pills.map(\.name))
     }
 
     /// Every element read gets its own short messaging timeout: the one set on
@@ -369,7 +373,12 @@ nonisolated enum PillProbe {
     /// in hand may be a copy the agent has since replaced); the one in hand
     /// is the fallback. Returns what happened, for the log, and the fresh copy.
     static func press(in bounds: CGRect, named: String?, kept: AXUIElement?) -> (result: String, fresh: PillCopy?) {
-        let fresh = pills(in: bounds).first { named == nil || $0.name == named }
+        let all = pills(in: bounds)
+        // `named` is a mirror's key, so two activities of one app each press
+        // their own pill; a bare description (an open card's owner is one)
+        // still finds the first pill of that name.
+        let fresh = named.flatMap { want in PillKeys.index(of: want, in: all.map(\.name)).map { all[$0] } }
+            ?? (named == nil ? all.first : nil)
         var notes: [String] = []
         if let fresh {
             AXUIElementSetMessagingTimeout(fresh.element, axTimeout)
@@ -444,10 +453,12 @@ nonisolated enum PillProbe {
     }
 
     private static func collect(_ element: AXUIElement, bar: Int, depth: Int, into found: inout [PillCopy]) {
-        if let id = attribute(element, kAXIdentifierAttribute) as? String, id.hasPrefix(identifierPrefix) {
+        if let id = attribute(element, kAXIdentifierAttribute) as? String,
+           id.hasPrefix(identifierPrefix) || id.hasPrefix(systemPillPrefix) {
             if let read = read(element) {
                 let name = (attribute(element, kAXDescriptionAttribute) as? String) ?? id
-                found.append(PillCopy(element: element, frame: read.frame, text: read.text, name: name, bar: bar))
+                found.append(PillCopy(element: element, frame: read.frame, text: read.text, name: name,
+                                      bar: bar, system: id.hasPrefix(systemPillPrefix)))
             }
             return
         }
@@ -488,6 +499,9 @@ final class LiveMirror {
         var texts: [String] = []
         var snapTexts: [String]?
         var textChangedAt: Date?
+        /// The AX texts this pill read on the pass before: a timer that is
+        /// counting changes them every pass, a paused one never does.
+        var tickTexts: [String]?
         /// When a text change was last logged, and how many came since: a
         /// ticking timer is one line every 10 s, not one a second.
         var textLoggedAt = Date.distantPast
@@ -505,6 +519,11 @@ final class LiveMirror {
         var absent = 0
         /// No room left of the « for it.
         var dropped = false
+        /// Turned off in Settings. Its mirror is kept — live mode has to know
+        /// a pill is there, and holds the cover over it — but never drawn,
+        /// never in a still and never read for a clock: `dropped` in every
+        /// way except the count of pills there are to mirror.
+        var hidden = false
         let firstSeen = Date()
         let container = CALayer()
         let base = CALayer()
@@ -582,6 +601,12 @@ final class LiveMirror {
         var aloneItems: [(id: String, x: CGFloat, width: CGFloat, said: String)] = []
         var aloneDrawnAt = Date.distantPast
         var aloneFresh = false
+        /// Where macOS's own camera and mic pill stood when the picture was
+        /// taken. Up to 27.2 the assertion took it off the bar with the rest,
+        /// so the picture was bare; on 27.3 it stays, and the picture holds a
+        /// copy of it that outlives the camera. The picture is smeared from
+        /// here, and the mirror draws the pill instead.
+        var systemPillEdge: CGFloat?
         /// When the picture was taken, and under which backdrop.
         var pictureAt = Date()
         var pictureGeneration = 0
@@ -596,6 +621,13 @@ final class LiveMirror {
         var skippedWindow: Date?
         /// The one trailing snapshot waiting for the rate limit to pass.
         var trailing: Task<Void, Never>?
+        /// A still this display owes once the open card goes: why it was
+        /// wanted, kept so the line that finally takes it says what for.
+        var owedStill: String?
+        /// When a pill's text last moved here, and whether the one short
+        /// refresh that follows the text going quiet has been taken.
+        var textMovedAt = Date()
+        var quietRefreshed = false
 
         init(id: CGDirectDisplayID, screen: NSScreen, scDisplay: SCDisplay) {
             self.id = id; self.screen = screen; self.scDisplay = scDisplay
@@ -612,6 +644,14 @@ final class LiveMirror {
     /// What the watcher last said, whatever the setting: turning the setting
     /// on picks it up (`settingChanged`).
     private var reported = (running: false, count: 0)
+    /// How many of those are real Live Activities (not Apple's camera and mic
+    /// pill, which `count` includes), and whether any was running during this
+    /// run. With none, the run was only for the mic or camera.
+    private var reportedReal = 0
+    private var runHadRealActivity = false
+    /// When the assertion came down in this run: how long the bar was left
+    /// bare for a pill that may never come.
+    private var assertionDownAt: Date?
     private var loop: Task<Void, Never>?
     private var lastChevron: NSRect?
     private var coverLifted = false
@@ -658,6 +698,9 @@ final class LiveMirror {
     /// back for a while (longer each time in a row).
     private var noPillSince: Date?
     private var emptyStrikes = 0
+    /// The hide list as the mirrors last took it, so a settings change that
+    /// left it alone costs no layout pass.
+    private var appliedHidden: Set<String> = []
     /// The ones in a row on an unlocked screen, where the bar could be read.
     private var noPillStrikesAwake = 0
     private var retryNotBefore = Date.distantPast
@@ -702,6 +745,7 @@ final class LiveMirror {
     private struct Remembered {
         var key: String
         var name: String
+        var system: Bool
         var visual: CGRect
         var bits: [(value: String, rel: CGRect)]
         var clock: ClockState
@@ -765,8 +809,10 @@ final class LiveMirror {
         }
     }
 
-    func activitiesChanged(running: Bool, count: Int = 0) {
+    func activitiesChanged(running: Bool, count: Int = 0, real: Int = 0) {
         reported = (running, count)
+        reportedReal = real
+        if real > 0 { runHadRealActivity = true }
         // With the setting off the watcher may still run (the item follows
         // it): live mode takes no part.
         follow(running: running && enabled, count: enabled ? count : 0, why: "activity ended")
@@ -776,6 +822,15 @@ final class LiveMirror {
     /// on, live mode picks up what the watcher last said; turned off, it
     /// leaves the way an ended activity does.
     func settingChanged() {
+        // A pill turned on or off changes no `wanted`: the mirrors take the
+        // list and the layout drops or picks the pill up again. Only when the
+        // list itself moved — this runs on every toggle in Settings.
+        let off = appState?.settings.hiddenLiveActivities ?? []
+        if off != appliedHidden {
+            PelmetLog.log("livemirror: pills turned off [\(off.sorted().joined(separator: ", "))]")
+            applyHiddenActivities()
+            if isActive { for side in sides { layoutMirrors(side) } }
+        }
         let running = enabled && reported.running
         guard running != wanted else { return }
         PelmetLog.log("livemirror: the setting turned \(enabled ? "on" : "off")")
@@ -784,6 +839,7 @@ final class LiveMirror {
 
     private func follow(running: Bool, count: Int, why: String) {
         if running != wanted { PelmetLog.log("livemirror: activities \(running ? "running" : "none") — wanted \(running)") }
+        if running, !wanted { runHadRealActivity = reportedReal > 0 }
         wanted = running
         // An activity started or ended: the pills are looked for every tick for
         // a few seconds (its pill shows a moment after the log line).
@@ -1005,7 +1061,7 @@ final class LiveMirror {
             guard let chevron = lastChevron else { continue }
             let pills = side.mirrors.filter { !$0.dropped && $0.visual != nil && $0.base.contents != nil }.map { m -> Remembered in
                 let v = m.visual!
-                return Remembered(key: m.key, name: m.copy.name, visual: v,
+                return Remembered(key: m.key, name: m.copy.name, system: m.copy.system, visual: v,
                                   bits: m.bits.map { ($0.value, $0.frame.offsetBy(dx: -v.minX, dy: -v.minY)) }, clock: m.clock)
             }
             remembered[side.id] = Memory(chevronMinX: coverEnd(chevron, on: side), pills: pills)
@@ -1098,14 +1154,18 @@ final class LiveMirror {
     /// actions are unsupported on the card, the pill and its window (error
     /// -25206) and an Escape posted to MenuBarAgent's pid does nothing.
     /// Presses the real pill `name` (a mirror's own) on `side`, looked up
-    /// fresh; no name presses the first mirror's.
+    /// fresh; no name presses the first mirror's. `name` is a mirror's key
+    /// ("Sports #2"), which tells two activities of one app apart, or the
+    /// bare AX description an open card reports as its owner, which cannot.
     @discardableResult
     private func pressPill(_ why: String, side: Side? = nil, name: String? = nil) async -> String {
         guard let side = side ?? sides.first(where: { !$0.mirrors.isEmpty }) ?? sides.first else { return "no display" }
         let bounds = side.bounds
-        let mirror = side.mirrors.first { name == nil || $0.copy.name == name } ?? side.mirrors.first
+        let mirror = side.mirrors.first { name == nil || $0.key == name }
+            ?? side.mirrors.first { name == nil || $0.copy.name == name }
+            ?? side.mirrors.first
         let kept = ElementBox(list: mirror.map { [$0.copy.element] } ?? [])
-        let wanted = name ?? mirror?.copy.name
+        let wanted = name ?? mirror?.key
         let started = Date()
         let (result, fresh) = await Task.detached(priority: .userInitiated) { PillProbe.press(in: bounds, named: wanted, kept: kept.list.first) }.value
         if let fresh, let mirror { mirror.copy = fresh }
@@ -1355,6 +1415,30 @@ final class LiveMirror {
         // is a picture, taken while the bar may still move).
         side.aloneFresh = true
         PelmetLog.log("livemirror: display \(side.id) icons out on their own \(Int(edge))..\(Int(upper))\(upper < right ? " (the « moved to \(Int(upper + 1)))" : "") — they keep beside the «, the mirrors left of them")
+    }
+
+    /// Where macOS's own pill stands, read just before the picture is taken.
+    /// The assertion is still up, so this is the one thing left on the bar
+    /// the picture is not meant to hold. Read from AX, and only believed
+    /// inside the cover: the pill's frame goes stale (it read 1039 while it
+    /// drew at 1480), and a wrong edge would smear real icons away.
+    private func measureSystemPill(_ side: Side, left: CGFloat, right: CGFloat) async {
+        side.systemPillEdge = nil
+        guard appState != nil, !side.showsAll else { return }
+        let bounds = side.bounds
+        let found = await Task.detached(priority: .userInitiated) {
+            PillProbe.pills(in: bounds).filter(\.system)
+        }.value
+        let shift = side.screen.frame.maxX - primaryMaxX
+        guard let edge = found.map({ $0.frame.minX + shift }).filter({ $0 > left + 8 && $0 < right }).min()
+        else {
+            if !found.isEmpty {
+                PelmetLog.log("livemirror: display \(side.id) macOS's own pill reads at \(found.map { Int($0.frame.minX + shift) }) — outside the cover \(Int(left))..\(Int(right)), the picture keeps it")
+            }
+            return
+        }
+        side.systemPillEdge = edge
+        PelmetLog.log("livemirror: display \(side.id) macOS's own pill is on the bare bar at \(Int(edge)) — smeared out of the picture, the mirror draws it")
     }
 
     /// The AX identifier a bar item's id ends with (`…::com.apple.menuextra.battery`).
@@ -1755,6 +1839,7 @@ final class LiveMirror {
             // rule's icon coming out at an unlock) may still be reflowing.
             await appState.waitUntilQuiesced(interval: 0.2, deadline: 2, poll: .milliseconds(30))
             await measureAlone(side, left: left, right: right)
+            await measureSystemPill(side, left: left, right: right)
             let rect = CGRect(x: left - shift, y: 0, width: right - left, height: 40)
             // Under the anchor the hidden icons are out on the bar: the bare
             // bar (the system's bar window left out) is the concealed bar.
@@ -1796,7 +1881,16 @@ final class LiveMirror {
             if fresh.contains(side.id), let picture = side.picture {
                 side.alone = side.aloneRun.flatMap { Self.cut(picture, run: $0, contentsScale: side.scale) }
                 side.aloneAttached = false
-                let smearFrom = side.alone == nil ? right : min(right, side.aloneRun?.lowerBound ?? right)
+                var smearFrom = side.alone == nil ? right : min(right, side.aloneRun?.lowerBound ?? right)
+                // macOS's own pill stayed on the bare bar: smear from its
+                // left edge so the picture holds no camera of its own. Only
+                // where the icons out on their own are drawn from their cut
+                // or there are none — smearing over a run nothing redraws
+                // would lose them. A few points of margin keep the column
+                // the smear repeats clear of the pill itself.
+                if let edge = side.systemPillEdge, side.aloneRun == nil || side.alone != nil {
+                    smearFrom = min(smearFrom, edge - 4)
+                }
                 side.picture = ConcealGhostOverlay.smeared(picture, from: smearFrom)
             }
             guard buildCover(side, left: coverLeft(for: side, right: right), right: right, why: "enter") else {
@@ -1822,6 +1916,7 @@ final class LiveMirror {
         await appState.engine.holdLift(true)
         let dropped = ms()
         PelmetLog.log("livemirror: assertion down at \(dropped)ms")
+        assertionDownAt = Date()
 
         // 3. Wait for the « to stop moving and the pill (with its children) to be there.
         let by = Date().addingTimeInterval(4)
@@ -1890,7 +1985,7 @@ final class LiveMirror {
         for r in memory.pills {
             guard let still = kept[keptKey(side, key: r.key)],
                   now.timeIntervalSince(still.at) < (still.look.items.isEmpty ? 900 : Self.graphicRefresh) else { continue }
-            let mirror = PillMirror(key: r.key, copy: PillCopy(element: AXUIElementCreateSystemWide(), frame: r.visual, text: "", name: r.name, bar: 0))
+            let mirror = PillMirror(key: r.key, copy: PillCopy(element: AXUIElementCreateSystemWide(), frame: r.visual, text: "", name: r.name, bar: 0, system: r.system))
             mirror.provisional = true
             mirror.visual = r.visual
             mirror.base.contents = still.image
@@ -1941,6 +2036,29 @@ final class LiveMirror {
     /// `keepMirrors`: the mirrors stay in the cover they stand in (the exit's:
     /// they leave there, with the exit motion, while the new cover is already
     /// up beneath them), and that cover goes once they are gone.
+    /// The bar as it is right now, to stand in while a retake runs (#136).
+    /// `bare` leaves the WindowServer's bar window out, so what comes back
+    /// is the empty bar pixel for pixel even with every icon still on it,
+    /// and it needs none of the settling the proper picture waits for. Our
+    /// own windows are left out too, so the cover standing over the bar
+    /// doesn't film itself. If it doesn't come, the old cover stays up and
+    /// the retake runs as it did before.
+    private func standInPicture(_ side: Side) async {
+        guard let old = side.picture else { return }
+        let shift = side.screen.frame.maxX - primaryMaxX
+        let rect = CGRect(x: old.windowFrame.minX - shift, y: 0, width: old.windowFrame.width, height: 40)
+        guard let fresh = await ConcealGhostOverlay.snapshotSet(
+            of: rect, excludingOwnWindows: true, displays: [side.id], bare: true, liveMirror: true
+        ).first else {
+            PelmetLog.log("livemirror: display \(side.id) has no stand-in picture — the old cover stays up for the retake")
+            return
+        }
+        side.picture = fresh
+        side.pictureAt = Date()
+        side.pictureGeneration = backdropGeneration
+        PelmetLog.log("livemirror: display \(side.id) stand-in picture \(Int(fresh.windowFrame.minX))..\(Int(fresh.windowFrame.maxX))")
+    }
+
     private func buildCover(_ side: Side, left: CGFloat, right: CGFloat, why: String, keepMirrors: Bool = false) -> Bool {
         guard let picture = side.picture else { return false }
         // The Hidden icons did not move (a display that shows every icon):
@@ -2175,6 +2293,12 @@ final class LiveMirror {
                     PelmetLog.log("livemirror: display \(side.id) pill \"\(mirror.key)\" unreadable — looking again")
                     side.needsDiscovery = true
                     mirror.container.isHidden = true
+                    // `present(_, true)` returns early on a mirror it thinks is
+                    // already shown, so hiding the layer without saying so here
+                    // hides it for the rest of the pill's life. The reads come
+                    // back whenever the agent does — a screen lock takes them
+                    // away for a minute and gives them back (Gab, 2026-11-06).
+                    mirror.shown = false
                 }
                 continue
             }
@@ -2184,6 +2308,17 @@ final class LiveMirror {
             live.append((mirror, tree))
         }
         guard !live.isEmpty else { return }
+        // A counting timer moves its text every pass; a paused one stops. The
+        // slow refresh below leans on this: a pill whose text has gone quiet
+        // is a picture, whatever AX still reports in it.
+        for (mirror, tree) in live {
+            let texts = tree.texts.map(\.value)
+            if let was = mirror.tickTexts, was != texts {
+                side.textMovedAt = Date()
+                side.quietRefreshed = false
+            }
+            mirror.tickTexts = texts
+        }
         // Wider than the cover starts: the pill lies left of it.
         if let leftmost = live.map(\.tree.frame.minX).min(), leftmost < side.coverMinX + 4, let picture = side.picture {
             let left = max(leftmost - 12, picture.windowFrame.minX + ConcealGhostOverlay.capturePadding, side.menusRight > 0 ? side.menusRight + 4 : 0)
@@ -2262,16 +2397,52 @@ final class LiveMirror {
             }
         }
         let pictureOnly = live.contains { !$0.tree.images.isEmpty && $0.tree.texts.isEmpty && !$0.mirror.dropped }
-        let refreshAfter = pictureOnly ? Self.pictureOnlyRefresh : Self.graphicRefresh
+        // A paused timer keeps its text, it just stops moving it: nothing
+        // else here will ask for a still again (the control it wears while
+        // paused holds its look still too), so five minutes is long enough
+        // for a bad one to sit there. One short refresh after the text goes
+        // quiet, then back to the slow one — a pill at rest need not be
+        // filmed every 45 s for as long as it lasts.
+        let quiet = !pictureOnly && !side.quietRefreshed
+            && Date().timeIntervalSince(side.textMovedAt) >= Self.pictureOnlyRefresh
+        let refreshAfter = pictureOnly || quiet ? Self.pictureOnlyRefresh : Self.graphicRefresh
         if reasons.isEmpty, !settling, !side.snapping, Date().timeIntervalSince(side.lastSnapshotAt) >= refreshAfter,
            live.contains(where: { !$0.tree.images.isEmpty && !$0.mirror.dropped }) {
+            if quiet { side.quietRefreshed = true }
             reasons.append(pictureOnly
                 ? "graphic refresh (\(Int(Self.pictureOnlyRefresh)) s, a picture with no text to change)"
+                : quiet
+                ? "graphic refresh (\(Int(Self.pictureOnlyRefresh)) s, the text stopped moving)"
                 : "graphic refresh (\(Int(Self.graphicRefresh / 60)) min, no text or size change seen)")
+        }
+        // A pill whose card is open is not the pill the concealed bar shows:
+        // macOS lights it and puts the card's control in it. A still taken
+        // then is that look, frozen onto a bar at rest — and with a paused
+        // timer nothing asks again, because its text and its control both
+        // stand still. Hold the capture while the card is up, take it when
+        // the card goes.
+        // A pill still waiting for its first still is never held back: with
+        // no still it is not drawn at all, and the cover paints it out.
+        let awaitingFirst = live.contains { $0.mirror.base.contents == nil && !$0.mirror.dropped }
+        if !settling, !side.snapping, !awaitingFirst, !reasons.isEmpty || side.owedStill != nil {
+            let cardOpen = await Task.detached(priority: .userInitiated) { PillProbe.cardIsOpen() }.value
+            if cardOpen {
+                if !reasons.isEmpty, side.owedStill == nil {
+                    let why = reasons.joined(separator: "; ")
+                    side.owedStill = why
+                    PelmetLog.log("livemirror: display \(side.id) snapshot held — a card is open, the pill is not at rest (\(why))")
+                }
+                reasons = []
+            } else if let owed = side.owedStill {
+                side.owedStill = nil
+                reasons.append("the card closed (\(owed))")
+            }
         }
         if !reasons.isEmpty, !settling, !side.snapping {
             side.snapping = true
             _ = await snapshot(side, live, reason: reasons.joined(separator: "; "))
+            // Whatever it was taken for, the still is fresh: nothing is owed.
+            side.owedStill = nil
             side.snapping = false
         }
         for (mirror, tree) in live {
@@ -2569,7 +2740,7 @@ final class LiveMirror {
     private func layoutMirrors(_ side: Side) {
         guard let overlay = side.cover?.members.first else { return }
         let window = overlay.windowFrame
-        let placed = side.mirrors.filter { $0.visual != nil && $0.misses < 3 }
+        let placed = side.mirrors.filter { $0.visual != nil && $0.misses < 3 && !$0.hidden }
         var gaps: [CGFloat] = []
         for (a, b) in zip(placed, placed.dropFirst()) {
             let g = b.visual!.minX - a.visual!.maxX
@@ -2611,6 +2782,13 @@ final class LiveMirror {
         }
         var x = right
         CATransaction.begin(); CATransaction.setDisableActions(true)
+        // Turned off: never placed, so `dropped` is set here rather than by
+        // the loop below, and whatever was on screen goes.
+        for mirror in side.mirrors where mirror.hidden {
+            mirror.dropped = true
+            mirror.global = nil
+            if !(handingOver || mirrorsLeaving) { present(mirror, false) }
+        }
         for mirror in placed.reversed() {
             guard let visual = mirror.visual else { continue }
             mirror.dropped = !fit.contains { $0 === mirror }
@@ -2697,12 +2875,46 @@ final class LiveMirror {
         for mirror in gone { retire(mirror) }
         side.mirrors.removeAll { $0.absent >= 2 }
         side.mirrors.sort { $0.copy.frame.minX < $1.copy.frame.minX }
+        applyHiddenActivities()
         let after = side.mirrors.map(\.key)
         if before != after {
             PelmetLog.log("livemirror: pills [\(before.joined(separator: ", "))] → [\(after.joined(separator: ", "))] (display \(side.id))")
             side.droppedNote = ""
             layoutMirrors(side)
         }
+    }
+
+    /// Settings' list of pills not to draw, applied to every display's
+    /// mirrors, and the names Settings lists back (bar order, leftmost
+    /// first). Called whenever the mirrors change and whenever the setting
+    /// does, so one turned off goes within a tick.
+    private func applyHiddenActivities() {
+        let off = appState?.settings.hiddenLiveActivities ?? []
+        appliedHidden = off
+        var names: [String] = []
+        for side in sides {
+            for mirror in side.mirrors {
+                // macOS's own pill is a privacy indicator: no switch turns it
+                // off, and it stays out of the list Settings offers.
+                guard !mirror.copy.system else { mirror.hidden = false; continue }
+                mirror.hidden = off.contains(mirror.copy.name)
+                if !names.contains(mirror.copy.name) { names.append(mirror.copy.name) }
+            }
+        }
+        appState?.liveActivityNamesChanged(names)
+        noteSystemPill(sides.contains { side in
+            side.mirrors.contains { $0.copy.system && $0.misses < 3 }
+        })
+    }
+
+    /// Whether macOS's own pill was mirrored the last time it was looked at.
+    private var appliedSystemPill = false
+
+    private func noteSystemPill(_ on: Bool) {
+        guard on != appliedSystemPill else { return }
+        appliedSystemPill = on
+        PelmetLog.log("livemirror: macOS's own pill \(on ? "is mirrored here" : "is gone")")
+        appState?.systemPillMirrorChanged(on)
     }
 
     /// A mirror that is done leaves with the exit motion, then its layer goes.
@@ -2872,6 +3084,10 @@ final class LiveMirror {
             return
         }
         let id = side.id
+        // The key is what presses THIS pill rather than another of the same
+        // name; the card reports the bare description as its owner, so the
+        // "is it already open" comparisons keep using that.
+        let key = mirror.key
         let name = mirror.copy.name
         Task { @MainActor in
             let at = Date()
@@ -2884,7 +3100,7 @@ final class LiveMirror {
                     // The click is already an outside interaction for the card
                     // and collapses it; a press on top interrupts that.
                     PelmetLog.log("livemirror: click — \"\(mirror.key)\" card open=true action=close result=the click closes it, no press (display \(id); \(probe.detail))")
-                    await self.confirmCardClosed(from: at, side: side, name: name)
+                    await self.confirmCardClosed(from: at, side: side, key: key, name: name)
                     return
                 }
                 // Another pill's card is open: the click collapses it, then this one opens.
@@ -2896,7 +3112,7 @@ final class LiveMirror {
                 }
                 if !closed { PelmetLog.log("livemirror: card \(probe.owners) still open 1.4s after — pressing \"\(mirror.key)\" anyway") }
             }
-            let result = await self.pressPill("mirror click", side: side, name: name)
+            let result = await self.pressPill("mirror click", side: side, name: key)
             PelmetLog.log("livemirror: click — \"\(mirror.key)\" card open=false action=press result=\(result) (display \(id); \(probe.detail))")
             var last = probe
             for _ in 0..<12 {
@@ -2911,7 +3127,7 @@ final class LiveMirror {
         }
     }
 
-    private func confirmCardClosed(from start: Date, side: Side, name: String) async {
+    private func confirmCardClosed(from start: Date, side: Side, key: String, name: String) async {
         var last = ""
         for _ in 0..<14 {
             try? await Task.sleep(for: .milliseconds(100))
@@ -2923,7 +3139,7 @@ final class LiveMirror {
             }
         }
         PelmetLog.log("livemirror: card still open 1.4s after the click — pressing the pill (\(last))")
-        let result = await pressPill("click fallback", side: side, name: name)
+        let result = await pressPill("click fallback", side: side, name: key)
         PelmetLog.log("livemirror: click — card open=true action=press (fallback) result=\(result)")
     }
 
@@ -3102,12 +3318,6 @@ final class LiveMirror {
         func ms() -> Int { Int(-started.timeIntervalSinceNow * 1000) }
         let generation = backdropGeneration
         liftedReturn?.cancel()
-        // The card goes with the pill.
-        let open = await cardProbe()
-        if open.open {
-            PelmetLog.log("livemirror: card open (retake) — closing it")
-            await pressPill("retake", name: open.owners.first { !$0.isEmpty })
-        }
         guard isActive, !exiting, !handingOver, !standDown else { return }
         if coverLifted {
             coverLifted = false
@@ -3129,11 +3339,26 @@ final class LiveMirror {
                 mirror.placeCandidate = nil
                 if mirror.clock.locked { carryOn(mirror, now: Date()) }
             }
+            // The picture in hand was taken over the backdrop that just
+            // left, so a cover rebuilt from it is a block of the old Space
+            // over the new one — a black capsule over a wallpaper, for the
+            // whole retake (#136, measured at 3.2s on 2026-11-11). The bare
+            // bar costs ~90ms at any time, so the cover that stands in shows
+            // the Space we are on.
+            if !side.showsAll, side.cover != nil { await standInPicture(side) }
             // The « slides back and the extras leave: the cover reaches to the
             // concealed « again, where the picture ends.
             // (A display that shows every icon has its Hidden icons beyond the
             // cover's end: growing it would hide them.)
             if !side.showsAll, let picture = side.picture { buildCover(side, left: side.coverMinX, right: picture.windowFrame.maxX, why: "retake") }
+        }
+        // The card goes with the pill. It waits for the covers: closing it is
+        // an AX press on another process, and a cover known to be stale has no
+        // reason to stay up for it (#136).
+        let open = await cardProbe()
+        if open.open {
+            PelmetLog.log("livemirror: card open (retake) — closing it")
+            await pressPill("retake", name: open.owners.first { !$0.isEmpty })
         }
         // The assertion comes back; once the bar beneath is bare (the same
         // wait that lifts a cover) the pictures are taken, the old cover
@@ -3270,8 +3495,10 @@ final class LiveMirror {
         }
         // The assertion is down for the pill's sake: with no pill to mirror
         // (the log said an activity runs, the bar shows none) live mode has
-        // nothing to do and leaves, and waits longer each time in a row.
-        let anyPill = sides.contains { $0.mirrors.contains { !$0.dropped && $0.misses < 3 && !$0.provisional } }
+        // nothing to do and leaves, and waits longer each time in a row. A
+        // pill turned off counts: the cover over it is the whole point, so
+        // live mode stays even when it draws nothing.
+        let anyPill = sides.contains { $0.mirrors.contains { ($0.hidden || !$0.dropped) && $0.misses < 3 && !$0.provisional } }
         if anyPill {
             noPillSince = nil
             emptyStrikes = 0
@@ -3284,6 +3511,11 @@ final class LiveMirror {
                 retryNotBefore = Date().addingTimeInterval(hold)
                 holdOffWhy = "no pill was found last time — holding off (a new activity ends the hold-off)"
                 PelmetLog.log("livemirror: no pill to mirror for \(Int(Self.noPillGrace))s — leaving live mode, not trying again for \(Int(hold))s")
+                // Nothing came while the camera or mic was live: on 27.3
+                // Apple's pill would have been here, so this macOS is one
+                // that takes it off the bar under an assertion. AppState
+                // checks the hardware and learns it.
+                appState.noPillFoundWhileLiveModeHeldTheBar()
                 await exit("no pill to mirror")
                 if noPillStrikesAwake >= Self.noPillStrikes { appState.liveActivityPillsMissing() }
                 return
@@ -3302,17 +3534,47 @@ final class LiveMirror {
 
     // MARK: Exit
 
+    /// A run that was only for the mic or camera (no real Live Activity) ends
+    /// after the bar was left bare for a while and Apple's pill never showed:
+    /// this macOS takes it off the bar under an assertion (27.2 and earlier),
+    /// so there is nothing to mirror. Without this, only a session longer than
+    /// the no-pill grace could say so, and a dictation lasts a few seconds:
+    /// every one entered live mode again, filmed the bar, lit the recording
+    /// indicator and left a cover that never matches the shadows under the bar.
+    private static let shortRunLearnAfter: TimeInterval = 0.8
+    /// Two runs in a row, not one: a pill that is only late on a macOS that
+    /// does keep it would otherwise be learnt away, and with it the privacy
+    /// indicator the cover is there to spare.
+    private static let shortRunsNeeded = 2
+    private var bareMicRuns = 0
+
+    private func learnNoSystemPill(_ reason: String) {
+        defer { assertionDownAt = nil }
+        guard reason == "activity ended", !runHadRealActivity, let down = assertionDownAt else { return }
+        let sawPill = sides.contains { $0.mirrors.contains { $0.misses < 3 && !$0.provisional } }
+        if sawPill { bareMicRuns = 0; return }
+        let bare = Date().timeIntervalSince(down)
+        guard bare >= Self.shortRunLearnAfter else { return }
+        bareMicRuns += 1
+        PelmetLog.log("livemirror: a mic or camera run ended after \(String(format: "%.1f", bare))s with no pill (\(bareMicRuns) of \(Self.shortRunsNeeded))")
+        guard bareMicRuns >= Self.shortRunsNeeded else { return }
+        appState?.learn(.systemPillSurvivesAssertion, false,
+                        why: "\(bareMicRuns) mic or camera sessions in a row ended with the bar bare and no pill came")
+    }
+
     func exit(_ reason: String) async {
         guard let appState, isActive, !exiting else { return }
         exiting = true
         changes &+= 1
         defer { exiting = false }
         hiddenOut = nil
+        learnNoSystemPill(reason)
         let started = Date()
         PelmetLog.log("livemirror: exit — \(reason)")
         // The mirrors leave first, the way the bar's own items do (the reveal
         // animation's exit); the cover stays up until the bar beneath is back.
         mirrorsLeaving = true
+        noteSystemPill(false)
         for side in sides { for mirror in side.mirrors { present(mirror, false) } }
         liftedReturn?.cancel()
         kept = [:]; remembered = [:]; keptPictures = [:]

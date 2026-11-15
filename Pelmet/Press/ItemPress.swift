@@ -73,14 +73,52 @@ final class ItemPress {
         let barTop: CGFloat
         /// The bar's height below that top.
         let barBottom: CGFloat
-        let screenWidth: CGFloat
+        /// Where the click lands. A menu or popover the press opens is
+        /// anchored to the item, so its span sits near this x — recorded,
+        /// not yet gated on, so #151's log says whether it discriminates.
+        let clickX: CGFloat
     }
 
+    /// The on-screen windows the oracles watch, by window number. Numbers,
+    /// not totals: another app's window leaving as the press's own arrives
+    /// keeps a total still, and the press read that as nothing shown and
+    /// put the item back under an open panel. Measured 2026-11-11, #142:
+    /// Control Center's panel was on screen from 10:21:46.150 to
+    /// 10:21:50.498 and the press logged "showed nothing" at 10:21:49.
     private nonisolated struct WindowCounts: Sendable {
         /// Elevated windows that are not Pelmet's (a menu, a popover).
-        var elevated = 0
+        var elevated: Set<Int> = []
         /// Windows of the item's own app.
-        var own = 0
+        var own: Set<Int> = []
+        /// #151: windows that could have been the menu and were not
+        /// counted, by window number. Kept as numbers and formatted only
+        /// when a press ends in "showed nothing" — the poll runs every
+        /// 30ms for up to `pressMenuWait`, so nothing is built per walk.
+        var turnedDown: [Int: TurnedDown] = [:]
+    }
+
+    /// A window the elevated gate turned down, as the window list gave it.
+    private nonisolated struct TurnedDown: Sendable {
+        let layer: Int
+        let x: CGFloat
+        let y: CGFloat
+        let width: CGFloat
+        let height: CGFloat
+        let owner: String
+
+        /// Which gate turned it down, against the geometry that judged it.
+        func why(_ g: Geometry) -> String {
+            let lowest = g.barTop + g.barBottom + 60
+            var gates: [String] = []
+            if layer != 0 { gates.append("layer \(layer)") }
+            if height <= AppTiming.pressPanelFloor {
+                gates.append("height \(Int(height))≤\(Int(AppTiming.pressPanelFloor))")
+            }
+            if y < g.barTop { gates.append("y \(Int(y))<\(Int(g.barTop))") }
+            if y > lowest { gates.append("y \(Int(y))>\(Int(lowest))") }
+            let gap = max(0, max(x - g.clickX, g.clickX - (x + width)))
+            return "\(owner) \(Int(width))×\(Int(height)) at \(Int(x)),\(Int(y)) click-gap \(Int(gap))pt — \(gates.joined(separator: " + "))"
+        }
     }
 
     private weak var appState: AppState?
@@ -271,14 +309,27 @@ final class ItemPress {
             defer { if unheld { transitions.reholdAfterPress() } }
             // Live mode's cover takes every click on the bar: this one goes through it.
             let passed = await appState.liveMirror.passClicksForPress()
+            // The held pictures carry the same catcher, and the one this
+            // press lifted is still fading while the others stay up, so a
+            // held bar ate the click and the item showed nothing (#142).
+            // Every cover passes clicks for the press. The window server
+            // commits the change a frame or two late, so a press that
+            // live mode has not already waited for waits here.
+            ConcealGhostOverlay.everyCoverPassesClicks(true)
+            if !passed { try? await Task.sleep(for: .milliseconds(40)) }
             let geometry = Self.geometry(at: frame)
             let before = await Self.counts(pid: target.pid, geometry: geometry)
             let wasFront = Self.isFrontmost(target.pid)
+            if Self.aimProbeOn {
+                let mid = CGPoint(x: frame.midX, y: frame.midY)
+                PelmetLog.log("press: \(key.rawValue) aim x\(Int(frame.minX))..\(Int(frame.maxX)) y\(Int(frame.minY))..\(Int(frame.maxY)) click \(Int(mid.x)),\(Int(mid.y)) → \(Self.whatIsAt(mid)), want pid \(target.pid)")
+            }
             await ItemMover.shieldedClick(
                 at: CGPoint(x: frame.midX, y: frame.midY),
                 button: button == .secondary ? .right : .left
             )
             if passed { appState.liveMirror.takeClicksAfterPress() }
+            ConcealGhostOverlay.everyCoverPassesClicks(false)
             let bar = aimDisplay.map {
                 clickedElsewhere ? ", on display \($0)'s bar" : ", on the main bar (display \($0)'s had no copy to click)"
             } ?? ""
@@ -409,8 +460,12 @@ final class ItemPress {
             hold()
             let still: Bool
             switch sign {
-            case .window: still = await Self.counts(pid: pid, geometry: geometry).elevated > before.elevated
-            case .ownWindow: still = await Self.counts(pid: pid, geometry: geometry).own > before.own
+            case .window:
+                still = !(await Self.counts(pid: pid, geometry: geometry))
+                    .elevated.subtracting(before.elevated).isEmpty
+            case .ownWindow:
+                still = !(await Self.counts(pid: pid, geometry: geometry))
+                    .own.subtracting(before.own).isEmpty
             case .appInFront: still = Self.isFrontmost(pid)
             }
             if !still {
@@ -488,22 +543,69 @@ final class ItemPress {
 
     // MARK: - Oracles
 
-    /// Polls for an elevated window beyond `before`, a new window of the
-    /// item's own app, or that app coming to the front (a popover activates
-    /// it), within the menu wait. A yielded relay stops waiting after
-    /// `pressYieldWait`: the click is already out and the item must not be
-    /// put back under a menu that is still opening.
+    /// Polls for an elevated window that was not on screen in `before`, a
+    /// new window of the item's own app, or that app coming to the front (a
+    /// popover activates it), within the menu wait. A yielded relay stops
+    /// waiting after `pressYieldWait`: the click is already out and the
+    /// item must not be put back under a menu that is still opening.
     private func waitForSign(over before: WindowCounts, pid: pid_t, geometry: Geometry, frontCounts: Bool, run: Run, hold: () -> Void) async -> Sign? {
         let showBy = Date().addingTimeInterval(AppTiming.pressMenuWait)
+        // #151: every window that came up during the wait and was turned
+        // down, gathered across walks — one that opens and closes inside
+        // the wait is the interesting case, so the last walk is not enough.
+        var appeared: [Int: TurnedDown] = [:]
         while Date() < run.capped(showBy) {
             hold()
             try? await Task.sleep(for: .milliseconds(30))
             let now = await Self.counts(pid: pid, geometry: geometry)
-            if now.elevated > before.elevated { return .window }
-            if now.own > before.own { return .ownWindow }
+            if !now.elevated.subtracting(before.elevated).isEmpty { return .window }
+            if !now.own.subtracting(before.own).isEmpty { return .ownWindow }
             if frontCounts, Self.isFrontmost(pid) { return .appInFront }
+            for (number, window) in now.turnedDown
+            where before.turnedDown[number] == nil && !before.elevated.contains(number) {
+                appeared[number] = window
+            }
+        }
+        // Nothing counted. Name what was there, so the next failing press
+        // in anyone's log says why — no debug flag for a reporter to set.
+        if !appeared.isEmpty {
+            let listed = appeared.values.map { $0.why(geometry) }.sorted()
+            PelmetLog.log("press: nothing counted, \(listed.count) window(s) turned down — \(listed.joined(separator: "; "))")
         }
         return nil
+    }
+
+    /// #142: a press that logs "showed nothing" either never reached the item
+    /// or reached something else, and nothing in the log tells the two apart.
+    /// Off unless `defaults write app.fif7y.Pelmet pelmet.debug.aimProbe
+    /// -bool YES`, so the shipped press runs exactly as before: this is one
+    /// synchronous AX read in the middle of a press, the kind of thing that
+    /// moves the timing it is there to measure.
+    private static var aimProbeOn: Bool {
+        UserDefaults.standard.bool(forKey: "pelmet.debug.aimProbe")
+    }
+
+    /// What the system says sits at the point the click is about to land on.
+    /// Our own element — the cover that hides the reveal — is named, never
+    /// read: an attribute read of our own AX element from the main thread
+    /// deadlocks (that is what `axCopyAttribute` exists for).
+    ///
+    /// `OverflowToggle` logs this on every « click (#150): those are rare
+    /// enough that the read needs no flag, unlike a press.
+    static func whatIsAt(_ point: CGPoint) -> String {
+        var element: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(
+            AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
+            let element
+        else { return "nothing" }
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        guard pid != ProcessInfo.processInfo.processIdentifier else { return "our own window" }
+        var roleValue: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue)
+        let role = roleValue as? String ?? "?"
+        let owner = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "pid \(pid)"
+        return "\(role)/\(owner)"
     }
 
     private static func isFrontmost(_ pid: pid_t) -> Bool {
@@ -520,12 +622,13 @@ final class ItemPress {
         if let id = NSScreen.screens.compactMap(\.directDisplayID).first(where: { CGDisplayBounds($0).contains(mid) }),
            id != CGMainDisplayID() {
             let bounds = CGDisplayBounds(id)
-            return Geometry(barTop: bounds.minY, barBottom: max(frame.maxY - bounds.minY, 24), screenWidth: bounds.width)
+            return Geometry(barTop: bounds.minY, barBottom: max(frame.maxY - bounds.minY, 24),
+                            clickX: mid.x)
         }
         return Geometry(
             barTop: 0,
             barBottom: NSScreen.screens.first.map { $0.frame.maxY - $0.visibleFrame.maxY } ?? 24,
-            screenWidth: NSScreen.screens.first?.frame.width ?? 1440
+            clickX: mid.x
         )
     }
 
@@ -541,7 +644,7 @@ final class ItemPress {
     /// Own: every on-screen window of `pid` but a bar row, whatever its
     /// level or shape. A status item has no window of its own on macOS 27:
     /// anything taller than a bar row is a popover or panel, whatever level
-    /// it sits at, and a press that opens one raises the count by one.
+    /// it sits at, and a press that opens one adds its number.
     @concurrent
     private static func counts(pid: pid_t, geometry: Geometry) async -> WindowCounts {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
@@ -551,23 +654,60 @@ final class ItemPress {
         for info in list {
             guard let owner = info[kCGWindowOwnerPID as String] as? Int32,
                   let layer = info[kCGWindowLayer as String] as? Int,
+                  let number = info[kCGWindowNumber as String] as? Int,
                   let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
                   let y = bounds["Y"], let width = bounds["Width"], let height = bounds["Height"]
             else { continue }
-            if pid > 0, owner == pid, height > 40 { counts.own += 1 }
+            let x = bounds["X"] ?? 0
+            if pid > 0, owner == pid, height > AppTiming.pressPanelFloor { counts.own.insert(number) }
             guard owner != me else { continue }
             // A system popover can sit at the bar's own level (layer 25,
             // 1131pt tall): the bar's level is excluded only at the bar's
             // height.
             if layer > 0, layer != 25 || height > 60 {
-                counts.elevated += 1
-            } else if layer == 0, height > 40, width < geometry.screenWidth * 0.6,
+                counts.elevated.insert(number)
+            } else if layer == 0, height > AppTiming.pressPanelFloor,
                       y >= geometry.barTop, y <= geometry.barTop + geometry.barBottom + 60 {
                 // A popover at the normal level: its top sits between the
                 // clicked bar's display top and 60pt below the bar (its
-                // bounds carry a margin), and it is nowhere near a document
-                // window's width.
-                counts.elevated += 1
+                // bounds carry a margin).
+                //
+                // No width test. One stood here — narrower than 60% of
+                // the display — and turned down a real panel: measured
+                // 2026-11-14 against a layer-0 panel of a known shape
+                // (dimble-tools/layer0harness), 1200pt of 1800 read as
+                // nothing opened and the item was concealed under it.
+                //
+                // What this band does NOT do is keep document windows out.
+                // Measured the same day: the only layer-0 window on screen
+                // over 40pt tall was a 950×840 editor at y=75, inside the
+                // band, and under the width test as well. It never counted
+                // because only a window that APPEARS during the wait is
+                // counted and that one was already in `before`. So the path
+                // this leaves open is a document window that opens inside
+                // the wait with its top in the band, and the cost is the bar
+                // held revealed for `pressMenuCap`. Narrow, against a
+                // miss on every wide panel on every press.
+                //
+                // The click gap is what actually separates the two: that
+                // editor sat 619pt from the click, a Safari window 944pt,
+                // panels 0pt. Three samples is not a gate, so it stays
+                // recorded — but it, not a wider band, is the next move.
+                counts.elevated.insert(number)
+            } else if height > AppTiming.pressRecordFloor, layer <= 0 || layer == 25 {
+                // #151: could have been the menu and was not counted. Which
+                // gate turned it down is the open question, and both ways
+                // of being wrong are bad — a miss conceals the item under
+                // its own menu (#26), a false count holds the bar revealed
+                // for `pressMenuCap` — so this records rather than guesses.
+                //
+                // Recorded from a lower floor than it is counted from: at
+                // the counting floor a 30pt panel was turned down AND
+                // recorded by nothing, so the log named no cause at all.
+                counts.turnedDown[number] = TurnedDown(
+                    layer: layer, x: x, y: y, width: width, height: height,
+                    owner: info[kCGWindowOwnerName as String] as? String ?? "pid \(owner)"
+                )
             }
         }
         return counts

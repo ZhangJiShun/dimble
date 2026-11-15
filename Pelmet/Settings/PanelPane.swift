@@ -85,7 +85,7 @@ struct PanelPane: View {
     /// The Icons rows and the modes that draw them.
     private static let modeRows: [String: Set<RevealTarget>] = [
         "panelStyle": [.panel], "panelNames": [.panel], "panelColumns": [.panel], "panelClosedApps": [.panel, .row],
-        "panelGroups": [.panel, .row], "panelAlwaysHidden": [.panel, .row], "panelFold": [.panel],
+        "panelCenterOnClick": [.panel, .row], "panelGroups": [.panel, .row], "panelAlwaysHidden": [.panel, .row], "panelFold": [.panel],
     ]
 
     /// The notch line only where a display has one; "under the menu bar"
@@ -106,6 +106,10 @@ struct PanelPane: View {
     private var icons: some View {
         let options = appState.settings.panel
         return SettingsCard(title: "Icons") {
+            SettingToggleRow(title: "Center on menu bar click",
+                             caption: "Opens where you click in empty menu bar space. The chevron keeps its anchor, and a panel that is already open does not move.",
+                             isOn: binding(\.centersOnClick))
+                .settingAnchor("panelCenterOnClick")
             if inUse.contains(.panel) {
                 SettingRow(title: "Style", caption: styleCaption(options.style)) {
                     PelmetSegments(selection: binding(\.style), options: [
@@ -151,6 +155,13 @@ struct PanelPane: View {
                     : "Keeps the groups you made in the menu bar together, one row each.",
                 isOn: binding(\.separatorsBreakRows))
                 .settingAnchor("panelGroups")
+            if inUse.contains(.panel) {
+                SettingToggleRow(
+                    title: "Settings button",
+                    caption: "A cog under the icons, bottom right.",
+                    isOn: binding(\.showsSettingsButton))
+                    .settingAnchor("panelSettingsButton")
+            }
         }
     }
 

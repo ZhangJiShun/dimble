@@ -29,7 +29,9 @@ struct LiveActivityLogParserTests {
         var activities = LiveActivities()
         let changed = Self.read([Self.descriptor, Self.created], into: &activities)
         #expect(changed == [false, true])
-        #expect(activities.active == [LiveActivity(id: "A1B2C3D4", bundleID: "com.example.orders", startedAt: Self.t0, agent: Self.agent)])
+        // The real line's sceneTargets name the widget's process too.
+        #expect(activities.active == [LiveActivity(id: "A1B2C3D4", bundleID: "com.example.orders",
+                                                  hostBundleID: "com.example.orders", startedAt: Self.t0, agent: Self.agent)])
     }
 
     @Test func theEndLinesTakeItAwayByID() {
@@ -235,9 +237,106 @@ struct LiveActivityLogParserTests {
         #expect(activities.ended.isEmpty)
     }
 
+    /// Two slots, newest first (the live run of 2026-11-07: a Sports
+    /// activity and three Shortcuts runs, Sports evicted every time).
+    @Test func theNewestTwoAreTheOnesTheBarShows() {
+        var activities = LiveActivities()
+        for (index, id) in ["AAAA1111", "BBBB2222", "CCCC3333", "DDDD4444"].enumerated() {
+            _ = Self.read(["Create client element for Live Activity: \(id)"],
+                          into: &activities, at: Self.t0.addingTimeInterval(Double(index)))
+        }
+        let split = activities.slotted(avPill: false)
+        #expect(split.onBar.map(\.id) == ["DDDD4444", "CCCC3333"])
+        #expect(split.hidden.map(\.id) == ["BBBB2222", "AAAA1111"])
+    }
+
+    /// Apple's camera and mic pill takes one of the two
+    /// ("evicting liveActivity(D52BA810) for better-ranked avModule(…)").
+    @Test func theCameraPillTakesASlotFromTheActivities() {
+        var activities = LiveActivities()
+        for (index, id) in ["AAAA1111", "BBBB2222"].enumerated() {
+            _ = Self.read(["Create client element for Live Activity: \(id)"],
+                          into: &activities, at: Self.t0.addingTimeInterval(Double(index)))
+        }
+        let split = activities.slotted(avPill: true)
+        #expect(split.onBar.map(\.id) == ["BBBB2222"])
+        #expect(split.hidden.map(\.id) == ["AAAA1111"])
+    }
+
+    @Test func nothingRunningSplitsIntoNothing() {
+        let split = LiveActivities().slotted(avPill: false)
+        #expect(split.onBar.isEmpty && split.hidden.isEmpty)
+    }
+
+    /// The Shortcuts run indicator asks as a service no Mac has an app for,
+    /// and names the app it belongs to in the same descriptor (27.3,
+    /// 2026-11-07).
+    @Test func theDescriptorNamesTheProcessTheWidgetLivesIn() {
+        var activities = LiveActivities()
+        let descriptor = #"Received live activity descriptor states: [ActivityKit.ActivityDescriptor(id: "A1B2C3D4-5E6F-4A1B-8C2D-3E4F5A6B7C8D", attributesType: Attributes type: ShortcutLiveActivityAttributes, requester: com.example.orders.ViewService, sceneTargets: [lockscreen: widget(containingProcess: com.example.orders)], isEphemeral: false)]"#
+        _ = Self.read([descriptor, Self.created], into: &activities)
+        #expect(activities.active.first?.bundleID == "com.example.orders.ViewService")
+        #expect(activities.active.first?.hostBundleID == "com.example.orders")
+    }
+
+    /// One pill, one activity nothing names: they can only be each other.
+    @Test func theOnlyPillNamesTheOnlyActivityWithoutAName() {
+        let learned = LiveActivities.pairNames(pills: ["Sports"], onBar: [(bundle: "com.example.sports", known: nil)])
+        #expect(learned.map(\.name) == ["Sports"])
+        #expect(learned.map(\.bundle) == ["com.example.sports"])
+    }
+
+    /// A pill the Mac can already name is claimed by its own activity, and
+    /// what is left over is the pair.
+    @Test func aKnownPillIsClaimedBeforeTheLeftoverIsPaired() {
+        let learned = LiveActivities.pairNames(
+            pills: ["Shortcuts", "myVW"],
+            onBar: [(bundle: "com.example.shortcuts", known: "Shortcuts"), (bundle: "com.example.car", known: nil)])
+        #expect(learned.map(\.name) == ["myVW"])
+        #expect(learned.map(\.bundle) == ["com.example.car"])
+    }
+
+    /// Two that nothing names: either pill could be either activity, so
+    /// neither is learned.
+    @Test func twoUnnamedActivitiesLearnNothing() {
+        let learned = LiveActivities.pairNames(
+            pills: ["Sports", "myVW"],
+            onBar: [(bundle: "com.example.sports", known: nil), (bundle: "com.example.car", known: nil)])
+        #expect(learned.isEmpty)
+    }
+
     @Test func savedStateSurvivesCoding() throws {
         let saved = Self.saved([Self.descriptor, Self.created])
         let data = try JSONEncoder().encode(saved)
         #expect(try JSONDecoder().decode(LiveActivities.Saved.self, from: data) == saved)
+    }
+}
+
+/// Two activities of one app share an AX description, and the press used to
+/// take the first of them whichever pill was clicked (fif7y/dimble).
+@Suite struct PillKeysTests {
+    @Test func secondPillOfOneAppGetsASuffix() {
+        #expect(PillKeys.keys(for: ["Sports", "Sports"]) == ["Sports", "Sports #2"])
+        #expect(PillKeys.keys(for: ["Sports", "myVW", "Sports"]) == ["Sports", "myVW", "Sports #2"])
+        #expect(PillKeys.keys(for: ["Sports", "Sports", "Sports"]) == ["Sports", "Sports #2", "Sports #3"])
+    }
+
+    @Test func aKeyFindsItsOwnPillNotTheFirstOfThatName() {
+        let names = ["Sports", "Sports"]
+        #expect(PillKeys.index(of: "Sports #2", in: names) == 1)
+        #expect(PillKeys.index(of: "Sports", in: names) == 0)
+    }
+
+    @Test func aBareDescriptionStillFindsTheFirstOfThatName() {
+        // What an open card reports as its owner is the description alone.
+        #expect(PillKeys.index(of: "myVW", in: ["Sports", "myVW", "Sports"]) == 1)
+        #expect(PillKeys.index(of: "Sports #3", in: ["Sports", "myVW", "Sports"]) == nil)
+        #expect(PillKeys.index(of: "Timer", in: ["Sports", "Sports"]) == nil)
+    }
+
+    @Test func oneNameIsItsOwnKey() {
+        #expect(PillKeys.keys(for: ["Sports"]) == ["Sports"])
+        #expect(PillKeys.index(of: "Sports", in: ["Sports"]) == 0)
+        #expect(PillKeys.keys(for: []) == [])
     }
 }

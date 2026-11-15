@@ -14,6 +14,14 @@ final class MenuBarBandMonitor {
     /// The pointer feed: a CG tap that wakes the main thread only for moves
     /// the band cares about; the NSEvent monitors are its fallback.
     private var pointerTap: PointerMoveTap?
+    /// Swallows the right-click Pelmet's bar menu answers, so macOS's own
+    /// never draws (#140). Nil where Accessibility would not give a tap.
+    private var rightClickTap: BarRightClickTap?
+    /// The point the last claim verdict was taken at, and when: the AX
+    /// hit-test behind it is not worth running on every move along the bar.
+    private var claimTakenAt: TimeInterval = 0
+    private var claimPoint: NSPoint?
+    private var claimTrailing: Task<Void, Never>?
     private var clickMonitor: Any?
     private var dragMonitor: Any?
     private var hoverTimer: Timer?
@@ -142,6 +150,18 @@ final class MenuBarBandMonitor {
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.rebuildScreenGeometry() }
+        }
+        // The one event Pelmet does swallow: a right-click the bar menu
+        // answers. Everything else below is passive — hover and click
+        // detection only, with empty-area clicks falling through.
+        let rightClick = BarRightClickTap { [weak self] in
+            PelmetLog.log("band: right-click on the empty bar, claimed — the OS menu never drew")
+            self?.openBarContextMenu()
+        }
+        if rightClick.start() {
+            rightClickTap = rightClick
+        } else {
+            PelmetLog.log("band: right-click tap unavailable — macOS draws its own bar menu first (#140)")
         }
         // Passive global monitors: enough for hover + click detection, no
         // event swallowing (empty-area clicks fall through harmlessly).
@@ -342,6 +362,11 @@ final class MenuBarBandMonitor {
     func stop() {
         pointerTap?.stop()
         pointerTap = nil
+        claimTrailing?.cancel()
+        claimTrailing = nil
+        rightClickTap?.stop()
+        rightClickTap = nil
+        claimPoint = nil
         dragRedirect.stop()
         panelDropZone = nil
         if let localDownMonitor { NSEvent.removeMonitor(localDownMonitor) }
@@ -407,7 +432,18 @@ final class MenuBarBandMonitor {
             }
         }
 
+        // Before the collapse gate: the bar menu answers a right-click on
+        // an "always show all" display too, so its claim is taken there.
+        refreshRightClickClaim(at: location, inBand: inBand, of: screen)
+
+        // The flag describes a collapsing display's band, and the reveal work
+        // below is for those displays only. A pointer that crossed onto a
+        // show-all display is in no band this flag names, so it is cleared
+        // here instead of keeping the last display's value (#84).
         guard appState.settings.behavior(forDisplayUUID: displayUUID) == .collapse else {
+            if pointerInBand {
+                pointerInBand = false
+            }
             resetHoverTarget()
             hoverDwell.update(inTarget: false, inBand: inBand, scope: appState.settings.revealTriggers.hoverScope)
             return
@@ -651,6 +687,84 @@ final class MenuBarBandMonitor {
         hoverTimer?.invalidate()
     }
 
+    // MARK: - Right-click claim (#140)
+
+    /// Leaves the tap a verdict for the point under the pointer, so a
+    /// right-click there can be swallowed before MenuBarAgent draws its own
+    /// menu over the bar. The same three gates the click path runs, in the
+    /// same order — this is that decision, taken early rather than late.
+    private func refreshRightClickClaim(at location: NSPoint, inBand: Bool, of screen: NSScreen?) {
+        guard let rightClickTap, let appState else { return }
+        guard inBand, let screen, appState.settings.barRightClickMenuActive else {
+            if claimPoint != nil { releaseRightClickClaim() }
+            return
+        }
+        // Already held for this very point: a pointer at rest sends no more
+        // moves, and its claim is the one the click will land on.
+        if let last = claimPoint, abs(last.x - location.x) < 2, abs(last.y - location.y) < 2 { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        // Throttled mid-sweep. The move that matters is the LAST one, where
+        // the pointer comes to rest — and no event announces that — so a
+        // short trailing pass takes the verdict there. Without it a claim
+        // stays where the sweep last paused, tens of points from the click.
+        if now - claimTakenAt < AppTiming.barRightClickClaimRefresh {
+            // One pending pass, not one per move: a sweep along the bar
+            // arrives at ~120Hz and each would otherwise cost a Task.
+            if claimTrailing == nil { scheduleTrailingClaim() }
+            return
+        }
+        claimTrailing?.cancel()
+        claimTrailing = nil
+        claimTakenAt = now
+        claimPoint = location
+        if foreignOverlay(under: location, of: screen) == nil,
+           !isInPinnedRightZone(location, on: screen),
+           // Quietly: the click path's own hit-test owns the log line and
+           // `lastHitOwner`, and this runs while the pointer merely travels.
+           isEmptyMenuBarArea(location, on: screen, recordsHit: false) {
+            rightClickTap.claim(at: CGPoint(x: location.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - location.y))
+        } else {
+            rightClickTap.release()
+        }
+    }
+
+    /// Where the pointer settles after a throttled sweep along the bar.
+    private func scheduleTrailingClaim() {
+        claimTrailing?.cancel()
+        claimTrailing = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(AppTiming.barRightClickClaimRefresh))
+            guard !Task.isCancelled, let self else { return }
+            self.claimTrailing = nil
+            // Long enough ago now that the throttle lets it through.
+            self.claimTakenAt = 0
+            let location = NSEvent.mouseLocation
+            let geometry = self.screenGeometry(containing: location)
+            self.refreshRightClickClaim(
+                at: location,
+                inBand: geometry.map { self.isBarHover(location, of: $0) } ?? false,
+                of: geometry?.screen
+            )
+        }
+    }
+
+    /// The bar is about to move under the pointer: whatever was bare bar a
+    /// moment ago may be an icon by the time the button goes down.
+    func releaseRightClickClaim() {
+        claimTrailing?.cancel()
+        claimTrailing = nil
+        claimPoint = nil
+        rightClickTap?.release()
+    }
+
+    /// Pelmet's menu for a right-click on the empty bar. Reached from the
+    /// tap once it has swallowed the click, and from the passive monitor
+    /// when there was no claim to swallow on.
+    private func openBarContextMenu() {
+        guard let appState, appState.settings.barRightClickMenuActive else { return }
+        PelmetStatusItem.contextMenu(appState: appState)
+            .popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
     func rearmHoverAfterConceal() {
         guard hoverDwell.isInside,
               let appState,
@@ -730,9 +844,14 @@ final class MenuBarBandMonitor {
                 // hidden icon. Opt-out for bars shared with an app that wants
                 // the same click (#8) — a separator's right-click is
                 // unaffected, so turning this off keeps a way in.
+                //
+                // Reached only when the tap had no claim to swallow on (no
+                // Accessibility, a pointer that stood still too long, a bar
+                // that moved under it). macOS has drawn its own menu by now
+                // and this one replaces it — the flash in #140.
                 guard appState.settings.barRightClickMenuActive else { return }
-                let menu = PelmetStatusItem.contextMenu(appState: appState)
-                menu.popUp(positioning: nil, at: location, in: nil)
+                PelmetLog.log("band: right-click on the empty bar, unclaimed — the OS menu drew first")
+                openBarContextMenu()
                 return
             }
             guard appState.settings.revealTriggers.clickEnabled else { return }
@@ -1022,16 +1141,29 @@ final class MenuBarBandMonitor {
         return point.x >= screen.frame.maxX - insetFromRight
     }
 
-    private func isEmptyMenuBarArea(_ point: NSPoint, on screen: NSScreen?) -> Bool {
+    /// `recordsHit: false` for the right-click claim, which asks the same
+    /// question on the move path: it must not log a line per move, and
+    /// `lastHitOwner` belongs to the click that reads it next (⌘-drag).
+    private func isEmptyMenuBarArea(_ point: NSPoint, on screen: NSScreen?, recordsHit: Bool = true) -> Bool {
         guard let primary = NSScreen.screens.first else { return false }
         // Convert bottom-left mouse coords → top-left AX coords.
         let axPoint = CGPoint(x: point.x, y: primary.frame.maxY - point.y)
+        // The bar's topmost row is MenuBarAgent's own window, and it shadows
+        // everything drawn under it: at the row's y the hit test answers
+        // AXWindow/com.apple.MenuBarAgent for the WHOLE width — over "File",
+        // over the Apple glyph, everywhere — which read as empty bar, so
+        // every click along the very top edge toggled a reveal (#147, grid
+        // probe 2026-11-13). The click belongs to whatever is drawn there, so
+        // ask a few points into the bar instead. Per display: a side bar's
+        // top row is at its own screen's y, not at 0.
+        let screenTopAX = primary.frame.maxY - (screen?.frame.maxY ?? primary.frame.maxY)
+        let probeY = max(axPoint.y, screenTopAX + Self.barTopProbeInset)
         let systemWide = AXUIElementCreateSystemWide()
         // Main-thread hit-test: a hung menu-bar app must not hold the UI
         // for the 6 s AX default.
         AXUIElementSetMessagingTimeout(systemWide, 0.3)
         var element: AXUIElement?
-        let hit = AXUIElementCopyElementAtPosition(systemWide, Float(axPoint.x), Float(axPoint.y), &element)
+        let hit = AXUIElementCopyElementAtPosition(systemWide, Float(axPoint.x), Float(probeY), &element)
         // A timed-out lookup says nothing about the bar; don't call it empty.
         if hit == .cannotComplete { return false }
         guard hit == .success, let element else {
@@ -1057,7 +1189,28 @@ final class MenuBarBandMonitor {
         // bar — a click that flashed open-shut-open (16 times across two
         // logs, 2026-09-18).
         if role == "AXMenuBar", pid == ProcessInfo.processInfo.processIdentifier, Self.isOwnExtrasBar(element) {
-            PelmetLog.log("band: hit-test role=AXMenuBar owner=\(owner) → own extras bar, not empty")
+            if recordsHit { PelmetLog.log("band: hit-test role=AXMenuBar owner=\(owner) → own extras bar, not empty") }
+            return false
+        }
+        // The corner left of the Apple menu is the Apple menu's, not empty
+        // space: macOS opens it from the screen's very edge while the item's
+        // AX frame starts 10pt in, so the strip between hit-tests as the bare
+        // backdrop and a corner click toggled a reveal under the menu that
+        // was opening — a click on the glyph itself was already refused
+        // (#147, probe 2026-11-13). Whichever bar is under the pointer
+        // answers for its own display. The screen's edge gates the frame
+        // reads, so a click anywhere else on the bar pays nothing for this.
+        if role == "AXMenuBar", let screen,
+           point.x - screen.frame.minX <= AppleMenuCorner.maxInset,
+           let bar = Self.axFrame(element),
+           AppleMenuCorner.holdsClick(
+               pointX: point.x,
+               barMinX: bar.minX,
+               appleMinX: Self.firstItemMinX(of: element)
+           ) {
+            if recordsHit {
+                PelmetLog.log("band: hit-test x=\(Int(point.x)) owner=\(owner) → the Apple menu's corner, not empty")
+            }
             return false
         }
         // The frontmost app's bare AXMenuBar element is the backdrop that
@@ -1067,9 +1220,42 @@ final class MenuBarBandMonitor {
             && (role == "AXMenuBar"
                 || owner == PelmetBundle.agentID
                 || role == "AXWindow" || role == "AXGroup")
+        guard recordsHit else { return empty }
         lastHitOwner = role == "AXMenuBarItem" && owner != "?" ? owner : nil
         PelmetLog.log("band: hit-test role=\(role) owner=\(owner) → empty=\(empty)")
         return empty
+    }
+
+    /// How far into the bar the hit test is asked, past MenuBarAgent's own
+    /// window on the top row. The row measured 1pt (AX y=0 was the agent's
+    /// window, y=1 the app's bar); 3 clears it with room to spare and is
+    /// still well inside a 24pt bar.
+    private static let barTopProbeInset: CGFloat = 3
+
+    /// An element's AX frame (top-left origin), nil when AX won't give both
+    /// halves of it.
+    private static func axFrame(_ element: AXUIElement) -> CGRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
+              let positionValue, let sizeValue,
+              CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+        var origin = CGPoint.zero
+        var extent = CGSize.zero
+        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(sizeValue as! AXValue, .cgSize, &extent) else { return nil }
+        return CGRect(origin: origin, size: extent)
+    }
+
+    /// The left edge of a menu bar's first item, the Apple menu — every app's
+    /// bar has it at child 0. Nil when the bar gives no children to read.
+    private static func firstItemMinX(of bar: AXUIElement) -> CGFloat? {
+        var childrenValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(bar, kAXChildrenAttribute as CFString, &childrenValue) == .success,
+              let children = childrenValue as? [AXUIElement], let first = children.first else { return nil }
+        return axFrame(first)?.minX
     }
 
     /// The element is Pelmet's `AXExtrasMenuBar` (its status items' bar),

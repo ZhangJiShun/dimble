@@ -29,10 +29,11 @@ final class ClockTimerStatus {
     /// are newer than it, so they fold in on top of it, not under it.
     private var recovering = false
     private var pending: [(message: String, date: Date)] = []
-    private var restarts = 0
-    /// When the stream last ended, until the replay on the way back has
-    /// covered it (see FocusStatus).
-    private var gapStart: Date?
+    /// The growing wait between reopening the stream, reset by a stream
+    /// that stayed up (`StreamRestartBackoff`).
+    private var backoff = StreamRestartBackoff()
+    /// When the running child opened, for that reset.
+    private var streamOpenedAt: Date?
     /// Pelmet quitting takes the child with it (see FocusStatus).
     private var termination: NSObjectProtocol?
     /// Wakes when a timer is past its bound (`ClockTimers.expire`).
@@ -40,14 +41,13 @@ final class ClockTimerStatus {
 
     func start() {
         stopped = false
-        gapStart = nil
         reapOrphans()
         if termination == nil {
             termination = NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification, object: nil, queue: .main
             ) { [weak self] _ in MainActor.assumeIsolated { self?.stop() } }
         }
-        recover(since: nil)
+        recover()
         openStream()
     }
 
@@ -74,19 +74,15 @@ final class ClockTimerStatus {
 
     // MARK: Boot
 
-    /// With `since` (a stream that ended and is being reopened) only the
-    /// gap is read, folded into the timers already known.
-    private func recover(since: Date?) {
+    private func recover() {
         recovering = true
-        let window = since.map { "\(min(24 * 60 * 60, Int(Date().timeIntervalSince($0)) + 5))s" } ?? "24h"
-        let known = timers
         Task.detached(priority: .utility) { [weak self] in
-            let lines = FocusStatus.run(["show", "--last", window, "--style", "ndjson", "--predicate", ClockTimers.predicate])
-            var replayed = since == nil ? ClockTimers() : known
+            let lines = FocusStatus.run(["show", "--last", "24h", "--style", "ndjson", "--predicate", ClockTimers.predicate])
+            var replayed = ClockTimers()
             for entry in lines.compactMap(Self.entry(in:)) { replayed.read(entry.message, at: entry.date) }
             await MainActor.run { [weak self] in
                 guard let self, !self.stopped else { return }
-                PelmetLog.log("clocktimer: \(since == nil ? "boot" : "replayed the gap") \(Self.describe(replayed.current))")
+                PelmetLog.log("clocktimer: boot \(Self.describe(replayed.current))")
                 for entry in self.pending { replayed.read(entry.message, at: entry.date) }
                 self.pending = []
                 self.recovering = false
@@ -104,9 +100,7 @@ final class ClockTimerStatus {
         process.arguments = ["stream", "--style", "ndjson", "--predicate", ClockTimers.predicate]
         let pipe = Pipe()
         process.standardOutput = pipe
-        let errors = Pipe()
-        process.standardError = errors
-        let startedAt = Date()
+        process.standardError = FileHandle.nullDevice
         let lines = FocusStatus.LineSplitter()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
@@ -124,43 +118,32 @@ final class ClockTimerStatus {
             }
         }
         process.terminationHandler = { [weak self] _ in
-            // Why `log` quit, when it says (it has a "Must be admin" refusal).
-            let why = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .split(separator: "\n").first.map(String.init) ?? ""
-            let ranFor = Date().timeIntervalSince(startedAt)
-            Task { @MainActor [weak self] in self?.streamEnded(why, ranFor: ranFor) }
+            Task { @MainActor [weak self] in self?.streamEnded() }
         }
         do {
             try process.run()
             stream = process
+            streamOpenedAt = Date()
         } catch {
-            // Retried like a stream that ended.
             PelmetLog.log("clocktimer: log stream failed — \(error.localizedDescription)")
-            streamEnded("could not start (\(error.localizedDescription))", ranFor: 0)
         }
     }
 
     /// logd restarts (or a kill) end the child; back off like FocusStatus.
-    private func streamEnded(_ why: String, ranFor: TimeInterval) {
+    private func streamEnded() {
         stream = nil
         guard !stopped else { return }
-        // A standard account: `log stream` is refused, and will be every
-        // time. Said once, not retried.
-        if why.contains("Must be admin") {
-            PelmetLog.log("clocktimer: log stream refused (\(why.prefix(120))) — not trying again")
-            return
-        }
-        if gapStart == nil { gapStart = Date() }
-        if ranFor >= FocusStatus.stableRun { restarts = 0 }
-        restarts += 1
-        let delay = min(60, 2 << min(restarts, 5))
-        PelmetLog.log("clocktimer: log stream ended\(why.isEmpty ? "" : " (\(why.prefix(120)))"), retry in \(delay)s")
+        // A child that ran a while ended for a reason of its own (logd
+        // restarted, the Mac slept), not because `log stream` is refused
+        // here, so its uptime starts the wait over.
+        let uptime = streamOpenedAt.map { Date().timeIntervalSince($0) }
+        streamOpenedAt = nil
+        let delay = backoff.delay(afterUptime: uptime)
+        PelmetLog.log("clocktimer: log stream ended, retry in \(delay)s")
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self, !self.stopped, self.stream == nil else { return }
-            let since = self.gapStart
-            self.gapStart = nil
-            self.recover(since: since)
+            self.recover()
             self.openStream()
         }
     }
@@ -199,6 +182,9 @@ final class ClockTimerStatus {
               let stamp = object["timestamp"] as? String
         else { return nil }
         // `log`'s ndjson timestamps: "2026-10-29 10:29:03.436123-0400".
-        return FocusStatus.logTimestamps.date(from: stamp).map { (message, $0) }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZ"
+        return formatter.date(from: stamp).map { (message, $0) }
     }
 }

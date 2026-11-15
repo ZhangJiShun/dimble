@@ -85,6 +85,14 @@ final class PanelPresenter: RevealPresenter {
     /// Opened by the pointer on a bar (a hover, a click, a ⌘-drag), not by
     /// a key or Settings: the pointer's display is the one (`targetScreen`).
     private var openedAtBar = false
+    /// The click this open centred on, spent at the first `place`: later
+    /// clicks and making a hover panel deliberate never recentre it.
+    private var clickAnchor: NSPoint?
+    /// What the click centred on became: a right edge for the rest of this
+    /// open, so the panel is anchored exactly as a chevron-anchored one is.
+    /// A column drag reads `window.frame.maxX`, so a centring that moved
+    /// with the width fed its own distance back and ran away (#135).
+    private var clickRight: CGFloat?
     /// A display unplugged or rearranged while it is open.
     private var screenObserver: NSObjectProtocol?
     /// Windows built again because the window server had the panel off the
@@ -150,6 +158,15 @@ final class PanelPresenter: RevealPresenter {
     /// nothing, one the notch hides): not asked for again until a picture
     /// would have gone stale anyway.
     private var unpicturable: [ItemID: Date] = [:]
+    /// `ConcealGhostOverlay.surfaceSignature()` when `unpicturable` was last
+    /// cleared. A tile the pass tried and missed waits out `maxAge` before it
+    /// is tried again, which is right while the bar it failed against is the
+    /// same bar. A new wallpaper, or a light/dark switch, is a different bar:
+    /// whatever refused the column is gone with it, so the wait goes too and
+    /// the tile has its picture back on the next open instead of in a quarter
+    /// of an hour. The signature is the backdrop watch's own, read here
+    /// rather than observed, since nothing needs it until a pass is weighed.
+    private var unpicturableSurface: [Int] = []
     /// Icons a pass revealed their section for and never found listed:
     /// their app runs with its own icon off, and the bar shows nothing for
     /// them (CleanShot, #26). Left out of the panel until the bar lists them
@@ -282,6 +299,9 @@ final class PanelPresenter: RevealPresenter {
             selected = nil
             opens += 1
             if let appState { loadCorpus(appState) }
+        }
+        if RevealRouting.centersPanelOnClick(reason, enabled: appState?.settings.panel.centersOnClick == true, isOpen: wasOpen) {
+            clickAnchor = NSEvent.mouseLocation
         }
         isOpen = true
         generation += 1
@@ -532,6 +552,8 @@ final class PanelPresenter: RevealPresenter {
         isOpen = false
         presentation.reset()
         pointerOnPanel = false
+        clickAnchor = nil
+        clickRight = nil
         askedThisOpen = []
         askedAgainLogged = false
         // A column drag cut short saves where it got to; its tip goes with
@@ -776,9 +798,31 @@ final class PanelPresenter: RevealPresenter {
         defer { updateTypingZone() }
         let margin = GlassPanel.edgeMargin
         let width = min(size.width, target.frame.width - 2 * margin)
+        // The click is spent here, once: centred on the width the panel
+        // first asked for, and kept as a right edge from then on.
+        if let anchor = clickAnchor {
+            clickAnchor = nil
+            if NSMouseInRect(anchor, target.frame, false) {
+                let edge = PlacementGeometry.centeredPanelX(
+                    pointerX: anchor.x, width: width,
+                    screenMinX: target.frame.minX, screenMaxX: target.frame.maxX,
+                    margin: margin
+                ) + width
+                clickRight = edge
+                PelmetLog.log("panel: centred on the click at x=\(Int(anchor.x)), right edge \(Int(edge))")
+            } else {
+                PelmetLog.log("panel: the click at x=\(Int(anchor.x)) is off this display, the chevron keeps the anchor")
+            }
+        }
         let top = Self.top(on: target)
         let glassX: CGFloat
-        if let chevron = drawnChevron() {
+        // A display unplugged under an open panel leaves an edge off it.
+        if let clickRight, clickRight > target.frame.minX, clickRight <= target.frame.maxX {
+            // Centred on the click, then kept by its right edge: dragging the
+            // columns measures from that edge, as for a panel pushed by the display.
+            glassX = max(clickRight - width, target.frame.minX + margin).rounded()
+            dragAnchor = nil
+        } else if let chevron = drawnChevron() {
             let anchor = target.frame.maxX - (chevron.screen.frame.maxX - chevron.frame.midX)
             let placement = PanelHorizontalPlacement.glassLeft(
                 anchor: anchor, width: width, minX: target.frame.minX + margin, maxX: target.frame.maxX - margin)
@@ -951,6 +995,12 @@ final class PanelPresenter: RevealPresenter {
                 self.press(tile)
             },
             onFold: { [weak self] in self?.toggleFold() },
+            // Same two steps as the menu's own row: the panel goes away
+            // before Settings takes the focus.
+            onSettings: { [weak self] in
+                self?.appState?.concealNow()
+                self?.appState?.openSettings(tab: .panel)
+            },
             tileMenu: { [weak self] tile in self?.menu(for: tile) ?? [] },
             panelMenu: { [weak self] in
                 self?.panelMenu(shown: self?.lastContent, onPanel: true) { [weak self] in self?.toggleFold() } ?? []
@@ -1138,6 +1188,9 @@ final class PanelPresenter: RevealPresenter {
         content.showsAlwaysHidden = alwaysShown
         content.motion = Self.foldStyle(appState.settings.revealAnimation)
         content.fold = options.alwaysHiddenFold
+        // Panel only (#95): the row is a strip along the bar, with no line
+        // under the tiles for a cog to sit on.
+        content.showsSettingsButton = options.showsSettingsButton && layout == .panel
         // The panel draws apps' own icons, never screen pictures, so the row's
         // tiles stay one width (upstream #102 sizes them to pictures).
         content.blocks = shown.map { entry in
@@ -2264,6 +2317,14 @@ final class PanelPresenter: RevealPresenter {
     func picturePassIfNeeded(_ missing: [ItemID]) {
         guard let appState, appState.screenRecordingGranted else { return }
         if passTask != nil { return }
+        let surface = ConcealGhostOverlay.surfaceSignature()
+        if surface != unpicturableSurface {
+            if !unpicturable.isEmpty {
+                PelmetLog.log("panel: the wallpaper or appearance changed — \(unpicturable.count) tile(s) asked for again")
+                unpicturable.removeAll()
+            }
+            unpicturableSurface = surface
+        }
         var wanted = missing.filter { key in
             unpicturable[key].map { -$0.timeIntervalSinceNow >= ItemPictures.maxAge } ?? true
         }

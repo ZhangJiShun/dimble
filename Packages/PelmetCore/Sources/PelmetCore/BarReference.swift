@@ -1,0 +1,96 @@
+// BarReference.swift
+// Is the empty-bar column a glyph is cut against really bar, and nothing
+// else? Pure pixel math — locked by BarReferenceTests.
+
+/// The reference a picture pass subtracts from an item's column is meant to
+/// be that column of the bar with no icon on it. It is not always: the icons
+/// move between the strip the pass films and the bar the reference was taken
+/// over, so a visible icon can stand in the column a hidden one is filmed in
+/// (#128: Claude's starburst under Snipaste's). Subtracting that leaves
+/// fragments of the intruder in the tile, and the keyed strip carries the
+/// same contamination, so there is nothing to fall back to downstream: such a
+/// column has to be refused before a picture is made of it.
+public enum BarReference {
+    /// A pixel this far off its column's own bar is not the bar. The same
+    /// step `ItemPictures.flatMask` calls ink.
+    public static let inkStep = 26
+
+    /// The share of a column's middle that may read as ink before the column
+    /// is refused.
+    ///
+    /// Measured 2026-11-11 over four real bars — Gab's three displays (a
+    /// built-in at 2x and two externals at 1x, over a flat wallpaper) and the
+    /// translucent bar over a photo wallpaper in #129's screenshot — by
+    /// sliding a column's width across each and scoring every position:
+    ///
+    /// - **Bar with no icon on it reads 0.00%.** Not a median, the maximum,
+    ///   on all four. The band's blur leaves nothing 26 levels off its own
+    ///   margins, even with a photograph under it.
+    /// - **59 real glyphs, scored on centre, run 3.3% to 36.7%.** The two
+    ///   thinnest (3.3%, 3.6%) are separators. The sparsest real glyph is
+    ///   9.3%, and the median is 15.8% at 2x, 21% at 1x.
+    /// - The one clean-looking thing that scored at all was a hard vertical
+    ///   edge inside the band (#129's stale cover boundary): 6.7% over a 2x
+    ///   column. A reference with a window's edge in it is wrong anyway, so
+    ///   refusing that column is right.
+    ///
+    /// Busier wallpapers were the obvious worry, so 22 more real bars were
+    /// read off other people's screenshots on the issues — light and dark,
+    /// photographs, gradients, several displays. **Empty bar never crossed
+    /// the step on any of them.** Its distance from its own margin line runs
+    /// 0 to 14.8 levels, median 3.8, so the busiest bar in the sample still
+    /// had 11 levels of headroom under 26, and every one of them scored a
+    /// 0.00% share where no icon sat. What the band does to a photograph is
+    /// blur it flat; more colour in it does not change that.
+    ///
+    /// So the gap is 6.7% to 9.3% and 8% splits it: every glyph but a
+    /// separator is caught, and nothing that is only bar is refused. It is a
+    /// narrow gap — widen the sample before moving this, with
+    /// `pelmet.debug.picturePass`, which logs the share of every column.
+    public static let inkShareLimit = 0.08
+
+    /// How much of the column's middle is not bar, 0 to 1.
+    ///
+    /// The band is blurred and no icon reaches its first and last rows, so
+    /// those rows are the column's own control: a straight line between them
+    /// is what the bar does in between, give or take the blur. That line
+    /// costs nothing and it cancels the band's own vertical gradient, which a
+    /// flat average would read as ink.
+    ///
+    /// `pixels` is RGBA8, top row first, `w` by `h`. A column too short to
+    /// keep margins clear of a glyph is not judged, and reads as 0.
+    public static func inkShare(_ pixels: UnsafePointer<UInt8>, width w: Int, height h: Int) -> Double {
+        let margin = h / 10
+        guard w > 0, margin >= 1, h - 2 * margin >= 2 else { return 0 }
+        let topCentre = Double(margin - 1) / 2
+        let bottomCentre = Double(h - 1) - Double(margin - 1) / 2
+        let span = bottomCentre - topCentre
+        guard span > 0 else { return 0 }
+        var ink = 0
+        for x in 0..<w {
+            var top = (0, 0, 0), bottom = (0, 0, 0)
+            for y in 0..<margin {
+                let t = (y * w + x) * 4, b = ((h - 1 - y) * w + x) * 4
+                top.0 += Int(pixels[t]); top.1 += Int(pixels[t + 1]); top.2 += Int(pixels[t + 2])
+                bottom.0 += Int(pixels[b]); bottom.1 += Int(pixels[b + 1]); bottom.2 += Int(pixels[b + 2])
+            }
+            for y in margin..<(h - margin) {
+                let i = (y * w + x) * 4
+                let t = (Double(y) - topCentre) / span
+                var off = 0
+                for c in 0..<3 {
+                    let a = Double(c == 0 ? top.0 : c == 1 ? top.1 : top.2) / Double(margin)
+                    let z = Double(c == 0 ? bottom.0 : c == 1 ? bottom.1 : bottom.2) / Double(margin)
+                    off = max(off, abs(Int((a + (z - a) * t).rounded()) - Int(pixels[i + c])))
+                }
+                if off >= inkStep { ink += 1 }
+            }
+        }
+        return Double(ink) / Double(w * (h - 2 * margin))
+    }
+
+    /// True when the column looks like bar all the way down.
+    public static func isClean(_ pixels: UnsafePointer<UInt8>, width w: Int, height h: Int) -> Bool {
+        inkShare(pixels, width: w, height: h) < inkShareLimit
+    }
+}

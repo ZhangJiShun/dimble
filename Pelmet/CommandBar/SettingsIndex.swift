@@ -86,6 +86,8 @@ enum SettingsIndex {
                   ["panel", "grid", "row", "notch", "overflow", "dropdown", "tray", "layout", "per display", "monitor", "external"]),
             panel("panelStyle", String(localized: "Style"),
                   ["compact", "tiles", "list", "tight", "layout", "look", "panel"]),
+            panel("panelCenterOnClick", String(localized: "Center on menu bar click"),
+                  ["center", "click", "position", "pointer", "panel", "row"]),
             panel("panelNames", String(localized: "Show names"),
                   ["labels", "names", "titles", "panel"]),
             panel("panelColumns", String(localized: "Columns"),
@@ -98,6 +100,8 @@ enum SettingsIndex {
                   ["fold", "always hidden", "panel"]),
             panel("panelFold", String(localized: "Opens from"),
                   ["always hidden fold", "fold", "tile", "chip", "count", "handle", "grabber", "always hidden", "panel"]),
+            panel("panelSettingsButton", String(localized: "Settings button"),
+                  ["cog", "gear", "settings", "preferences", "shortcut", "panel"]),
 
             search("searchHotkey", String(localized: "Search the menu bar"),
                    ["command bar", "find", "shortcut", "hotkey"]),

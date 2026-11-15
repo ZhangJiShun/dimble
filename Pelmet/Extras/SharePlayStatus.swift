@@ -32,10 +32,11 @@ final class SharePlayStatus {
     /// are newer than it, so they fold in on top of it, not under it.
     private var recovering = false
     private var pending: [String] = []
-    private var restarts = 0
-    /// When the stream last ended, until the replay on the way back has
-    /// covered it (see FocusStatus).
-    private var gapStart: Date?
+    /// The growing wait between reopening the stream, reset by a stream
+    /// that stayed up (`StreamRestartBackoff`).
+    private var backoff = StreamRestartBackoff()
+    /// When the running child opened, for that reset.
+    private var streamOpenedAt: Date?
     /// Pelmet quitting takes the child with it (see FocusStatus).
     private var termination: NSObjectProtocol?
     /// When the last controller line was logged, and what checks it against
@@ -50,14 +51,13 @@ final class SharePlayStatus {
 
     func start() {
         stopped = false
-        gapStart = nil
         reapOrphans()
         if termination == nil {
             termination = NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification, object: nil, queue: .main
             ) { [weak self] _ in MainActor.assumeIsolated { self?.stop() } }
         }
-        recover(since: nil)
+        recover()
         openStream()
     }
 
@@ -90,29 +90,24 @@ final class SharePlayStatus {
     /// movie's last hour can be only session lines. A session Control Center
     /// never saw end — it relaunched, the Mac restarted — reads as over:
     /// its last controller line predates the running Control Center.
-    /// With `since` (a stream that ended and is being reopened) only the
-    /// gap is read, folded into the state already known.
-    private func recover(since: Date?) {
+    private func recover() {
         recovering = true
-        let windows = since.map { ["\(min(24 * 60 * 60, Int(Date().timeIntervalSince($0)) + 5))s"] } ?? ["1h", "24h"]
-        let known = state
         Task.detached(priority: .utility) { [weak self] in
             var entries: [(message: String, date: Date?)] = []
-            for window in windows where !entries.contains(where: { $0.message.hasPrefix("[Controller] ") }) {
+            for window in ["1h", "24h"] where !entries.contains(where: { $0.message.hasPrefix("[Controller] ") }) {
                 let lines = FocusStatus.run(["show", "--last", window, "--style", "ndjson", "--predicate", Self.predicate])
                 entries = lines.compactMap(Self.entry(in:))
             }
-            var replayed = since == nil ? SharePlayState() : known
+            var replayed = SharePlayState()
             for entry in entries { replayed.read(entry.message) }
             let started = Self.controlCenterStart()
             let lastController = entries.last { $0.message.hasPrefix("[Controller] ") }?.date
             var stale = false
-            if since == nil, replayed.controllerActive, let started { stale = (lastController ?? .distantPast) < started }
+            if replayed.controllerActive, let started { stale = (lastController ?? .distantPast) < started }
             if stale { replayed = SharePlayState() }
-            let boot = since == nil
             await MainActor.run { [weak self] in
                 guard let self, !self.stopped else { return }
-                PelmetLog.log("shareplay: \(boot ? "boot" : "replayed the gap") \(Self.describe(replayed))\(stale ? " (stale session dropped)" : "")\(entries.isEmpty ? ", nothing on record" : "")")
+                PelmetLog.log("shareplay: boot \(Self.describe(replayed))\(stale ? " (stale session dropped)" : "")\(entries.isEmpty ? ", nothing on record" : "")")
                 for message in self.pending { replayed.read(message) }
                 self.pending = []
                 self.recovering = false
@@ -163,9 +158,7 @@ final class SharePlayStatus {
         process.arguments = ["stream", "--style", "ndjson", "--predicate", Self.predicate]
         let pipe = Pipe()
         process.standardOutput = pipe
-        let errors = Pipe()
-        process.standardError = errors
-        let startedAt = Date()
+        process.standardError = FileHandle.nullDevice
         let lines = FocusStatus.LineSplitter()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
@@ -187,43 +180,32 @@ final class SharePlayStatus {
             }
         }
         process.terminationHandler = { [weak self] _ in
-            // Why `log` quit, when it says (it has a "Must be admin" refusal).
-            let why = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .split(separator: "\n").first.map(String.init) ?? ""
-            let ranFor = Date().timeIntervalSince(startedAt)
-            Task { @MainActor [weak self] in self?.streamEnded(why, ranFor: ranFor) }
+            Task { @MainActor [weak self] in self?.streamEnded() }
         }
         do {
             try process.run()
             stream = process
+            streamOpenedAt = Date()
         } catch {
-            // Retried like a stream that ended.
             PelmetLog.log("shareplay: log stream failed — \(error.localizedDescription)")
-            streamEnded("could not start (\(error.localizedDescription))", ranFor: 0)
         }
     }
 
     /// logd restarts (or a kill) end the child; back off like FocusStatus.
-    private func streamEnded(_ why: String, ranFor: TimeInterval) {
+    private func streamEnded() {
         stream = nil
         guard !stopped else { return }
-        // A standard account: `log stream` is refused, and will be every
-        // time. Said once, not retried.
-        if why.contains("Must be admin") {
-            PelmetLog.log("shareplay: log stream refused (\(why.prefix(120))) — not trying again")
-            return
-        }
-        if gapStart == nil { gapStart = Date() }
-        if ranFor >= FocusStatus.stableRun { restarts = 0 }
-        restarts += 1
-        let delay = min(60, 2 << min(restarts, 5))
-        PelmetLog.log("shareplay: log stream ended\(why.isEmpty ? "" : " (\(why.prefix(120)))"), retry in \(delay)s")
+        // A child that ran a while ended for a reason of its own (logd
+        // restarted, the Mac slept), not because `log stream` is refused
+        // here, so its uptime starts the wait over.
+        let uptime = streamOpenedAt.map { Date().timeIntervalSince($0) }
+        streamOpenedAt = nil
+        let delay = backoff.delay(afterUptime: uptime)
+        PelmetLog.log("shareplay: log stream ended, retry in \(delay)s")
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self, !self.stopped, self.stream == nil else { return }
-            let since = self.gapStart
-            self.gapStart = nil
-            self.recover(since: since)
+            self.recover()
             self.openStream()
         }
     }
@@ -251,6 +233,9 @@ final class SharePlayStatus {
               let message = object["eventMessage"] as? String
         else { return nil }
         // `log`'s ndjson timestamps: "2026-09-25 21:49:17.086123-0400".
-        return (message, (object["timestamp"] as? String).flatMap(FocusStatus.logTimestamps.date(from:)))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZ"
+        return (message, (object["timestamp"] as? String).flatMap(formatter.date(from:)))
     }
 }

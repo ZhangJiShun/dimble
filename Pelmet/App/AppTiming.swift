@@ -168,6 +168,12 @@ enum AppTiming {
     /// Below ~100ms every swipe-through of the band reads as a hover
     /// (the fire-time live-pointer check catches the rest).
     static let hoverDelayFloor: TimeInterval = 0.1
+    /// Right-click claim (#140): not oftener than this while the pointer
+    /// travels along the band. The verdict is a cross-process AX hit-test
+    /// (~0.3ms) and a move already costs 0.24ms with the geometry cached.
+    /// How long a taken claim then stands is the tap's own
+    /// `BarRightClickTap.claimFreshness` — it is read off the main actor.
+    static let barRightClickClaimRefresh: TimeInterval = 0.15
     /// A chevron click this soon after a hover reveal was dispatched was
     /// decided before the user could see the bar open (the picture is up
     /// ~100–200ms after dispatch, a reaction takes ~250ms more): it means
@@ -258,6 +264,15 @@ enum AppTiming {
     /// camera pill often takes over within ~50ms and the indicator defers to
     /// it again — queuing before the flap settles queues a dead walk.
     static let cameraIndicatorPlaceDebounce: Duration = .milliseconds(500)
+    /// Camera or mic goes live → the earliest Dimble's own replica may show,
+    /// while `systemPillSurvivesAssertion` says Apple's pill is coming.
+    /// macOS 27.3 builds that pill, destroys it and builds it again under a
+    /// new UUID ~260ms later (measured 2026-11-07), so the AX read is false
+    /// in the gap and the replica would show, leave and show again before
+    /// live mode's mirror settles it. Past the longest settle seen (665ms),
+    /// and short enough that a session Apple never marks still gets an
+    /// indicator.
+    static let cameraIndicatorPillGrace: Duration = .milliseconds(700)
     /// Relaunched app → adoption window: first wait lets the app construct
     /// its status item; the retry covers slow bootstraps (Electron vault
     /// apps build their tray ~20s in).
@@ -289,6 +304,14 @@ enum AppTiming {
     /// Bounded: a frame that never settles is clicked where it last read.
     static let pressFrameTolerance: CGFloat = 1
     static let pressFrameCap: TimeInterval = 1
+    /// A layer-0 window taller than this is a panel, not a bar row: the
+    /// floor the press oracle counts a menu from (`ItemPress.counts`).
+    nonisolated static let pressPanelFloor: CGFloat = 40
+    /// What the oracle RECORDS a turned-down window from, below what it
+    /// counts from. Measured 2026-11-14 (#151): a 30pt layer-0 panel was
+    /// missed by the count and named by nothing, because the record shared
+    /// the count's floor. Low enough that anything visible is named.
+    nonisolated static let pressRecordFloor: CGFloat = 8
     /// A press waits this long for a reveal or conceal already running.
     static let pressTransitionWait: TimeInterval = 2
     /// A newer press makes the one before it yield: it still waits this

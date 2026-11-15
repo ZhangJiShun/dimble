@@ -32,6 +32,36 @@ public enum RevealTarget: String, Codable, CaseIterable, Sendable {
 }
 
 public enum RevealRouting {
+    /// A policy-opened bar is only the baseline; explicit Always Hidden
+    /// requests still follow the panel setting.
+    public static func replacesPolicyBarWithPanel(current: Set<Section>, openedBy: RevealReason,
+                                                  requested: Set<Section>, reason: RevealReason,
+                                                  target: RevealTarget) -> Bool {
+        openedBy == .displayPolicy && !current.contains(.alwaysHidden)
+            && requested.contains(.alwaysHidden) && destination(for: reason, target: target) == .panel
+    }
+
+    /// A click in the empty bar of a display that shows all icons asks for
+    /// icons it already shows, so it opens no panel. The chevron is not one
+    /// of these: there it widens to Always Hidden (#96, `clickWidensToAlwaysHidden`,
+    /// which runs first), and a request that already carries Always Hidden
+    /// is a deliberate one wherever it came from.
+    public static func suppressesPanelClick(_ reason: RevealReason, sections: Set<Section>, behavior: DisplayBehavior, target: RevealTarget) -> Bool {
+        behavior == .alwaysShowAll && target != .menuBar && !sections.contains(.alwaysHidden)
+            && (reason == .click || reason == .doubleClick)
+    }
+
+    /// The show-all policy holds the native baseline open, not temporary
+    /// panels or Always Hidden reveals.
+    public static func displayPolicyHoldsReveal(behavior: DisplayBehavior, anchored: Bool, panelShowsReveal: Bool, sections: Set<Section>) -> Bool {
+        behavior == .alwaysShowAll && !anchored && !panelShowsReveal && !sections.contains(.alwaysHidden)
+    }
+
+    /// Capture an empty-bar click only on opening, so an open panel stays put while aiming at a tile.
+    public static func centersPanelOnClick(_ reason: RevealReason?, enabled: Bool, isOpen: Bool) -> Bool {
+        enabled && !isOpen && (reason == .click || reason == .doubleClick)
+    }
+
     public enum Destination: Equatable, Sendable {
         case bar
         case panel

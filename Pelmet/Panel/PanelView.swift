@@ -121,6 +121,10 @@ struct PanelContent {
     /// A tile drag makes room as it goes (and a moment after it ends): tiles
     /// that change place ease there instead of jumping.
     var animatesTiles = false
+    /// The cog under the tiles that opens Settings (#95). Settings › Panel
+    /// turns it on; it is part of the body, so the measuring pass counts its
+    /// height like any other row.
+    var showsSettingsButton = false
     /// Nothing is hidden, or nothing matches: the panel says so instead of
     /// showing nothing.
     var isEmpty: Bool { blocks.allSatisfy { $0.count == 0 } }
@@ -138,6 +142,8 @@ struct PanelView: View {
     let content: PanelContent
     let onPress: (PanelTile) -> Void
     let onFold: () -> Void
+    /// The cog's action, when `content.showsSettingsButton` draws one.
+    var onSettings: () -> Void = {}
     var tileMenu: (PanelTile) -> [PanelMenuRow] = { _ in [] }
     var panelMenu: () -> [PanelMenuRow] = { [] }
     /// The left edge sets the columns: dragged (the pointer's x in the
@@ -169,9 +175,23 @@ struct PanelView: View {
             }
             // The padding scrolls with the tiles: they run to the glass's
             // edge, not to a line inside it.
-            scrolling(tiles.padding(content.query.isEmpty ? .all : [.horizontal, .bottom], padding))
+            scrolling(tiles.padding(content.query.isEmpty ? .all : [.horizontal, .bottom], padding)
+                .padding(.bottom, cogRoom))
         }
         .fixedSize()
+        // The cog hangs in the corner over the tiles' own bottom padding
+        // instead of taking a line of its own (Gab, 2026-11-11: "it adds a
+        // lot of empty space for a small action"). `cogRoom` is the few
+        // points it needs beyond that padding, and it is a padding on the
+        // tiles, so the measuring pass still counts it. An overlay adds no
+        // height by itself, which is the point.
+        .overlay(alignment: .bottomTrailing) {
+            if content.showsSettingsButton, !content.isEmpty {
+                settingsCog
+                    .padding(.trailing, padding)
+                    .padding(.bottom, 4)
+            }
+        }
         .overlay(alignment: .leading) {
             if content.layout == .panel, !content.isEmpty {
                 ZStack(alignment: .leading) {
@@ -243,6 +263,11 @@ struct PanelView: View {
         if block.foldable {
             // A search shows the matches, no fold.
             let fold: PanelOptions.AlwaysHiddenFold? = content.query.isEmpty ? content.fold : nil
+            let hasOtherIcons = content.blocks.contains { other in
+                other.kind != .alwaysHidden && !other.isFolded && other.grid.rows.joined().contains {
+                    $0.tile != .fold && $0.tile != .rowBreak
+                }
+            }
             VStack(alignment: .trailing, spacing: 0) {
                 // Both stay where they are: the tiles come out under them.
                 if fold == .count {
@@ -252,7 +277,20 @@ struct PanelView: View {
                 if fold == .handle {
                     handleFold(block)
                 }
-                foldedTiles(block, gap: fold == .count ? 6 : first && fold == nil ? 0 : 10)
+                // Use the existing group gap so expansion keeps the panel size and drag coordinates unchanged.
+                let groupGap: CGFloat = fold == .count ? 6 : first && fold == nil ? 0 : 10
+                foldedTiles(block, gap: groupGap)
+                    // Centred in that gap, so the air above the rule matches
+                    // the air below it whatever the gap is.
+                    .overlay(alignment: .top) {
+                        if hasOtherIcons, !block.isFolded {
+                            Rectangle().fill(ink.rule)
+                                .frame(height: 1)
+                                .offset(y: (groupGap - 1) / 2)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
                     // The open grid lit as a drop target. Outside the fold's
                     // mask, which cuts at the grid's width.
                     .background(alignment: .bottomTrailing) {
@@ -354,6 +392,33 @@ struct PanelView: View {
         .accessibilityValue(Text(block.count, format: .number))
         .frame(width: content.width)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PanelHost.space)) } action: { onFrame(.fold, $0) }
+    }
+
+    /// What the cog needs below the last row, on top of the tiles' own
+    /// bottom padding. The glyph is 11pt in an 18pt frame, so 14 here leaves
+    /// it clear of the tile above without a line of its own: 30pt of panel
+    /// height became 14pt.
+    private var cogRoom: CGFloat {
+        content.showsSettingsButton && !content.isEmpty ? 14 : 0
+    }
+
+    /// The cog in the bottom-right corner (#95). Borderless like every other
+    /// control in the panel: the glyph alone at rest, a well only under the
+    /// pointer, the same two lines as the search row's magnifying glass. It
+    /// sits at the trailing edge because the tiles' right edge is the one the
+    /// eye follows down.
+    private var settingsCog: some View {
+        Button(action: onSettings) {
+            Image(systemName: "gearshape")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ink.tertiary)
+                .frame(width: 18, height: 18)
+                .contentShape(Circle())
+        }
+        .buttonStyle(FoldFillStyle(ink: ink, shape: Circle(), resting: .clear))
+        .focusEffectDisabled()
+        .help(Text("Dimble Settings"))
+        .accessibilityLabel(Text("Dimble Settings"))
     }
 
     /// The handle fold: a grabber on the bottom edge while folded. It stays
@@ -588,6 +653,10 @@ struct PanelInk {
     var primary: Color { base.opacity(scheme == .dark ? 0.92 : 0.86) }
     var secondary: Color { base.opacity(scheme == .dark ? 0.64 : 0.6) }
     var tertiary: Color { base.opacity(scheme == .dark ? 0.40 : 0.36) }
+    /// The group separator. It only has to say "a boundary is here", which a
+    /// line at reading strength overstates, so it sits between the wells and
+    /// the inks that carry meaning.
+    var rule: Color { base.opacity(scheme == .dark ? 0.14 : 0.11) }
     var well: Color { base.opacity(scheme == .dark ? 0.075 : 0.05) }
     var wellHover: Color { base.opacity(scheme == .dark ? 0.13 : 0.085) }
     var wellPress: Color { base.opacity(scheme == .dark ? 0.2 : 0.13) }

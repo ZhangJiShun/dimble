@@ -3,6 +3,181 @@ import Testing
 @testable import PelmetCore
 
 @Suite struct RevealRoutingTests {
+    @Test func emptyBarDoubleClickReplacesThePolicyBarWithConfiguredPanel() {
+        for target in [RevealTarget.panel, .row] {
+            var machine = RehideStateMachine(policy: RehidePolicy(autoRehide: true, delay: 1))
+            _ = machine.handle(.revealRequested([.hidden], .displayPolicy))
+            _ = machine.handle(.transitionSettled)
+            guard case .revealed(let current, let by) = machine.state else {
+                Issue.record("Expected the show-all policy baseline")
+                return
+            }
+            let all: Set<Section> = [.hidden, .alwaysHidden]
+            let replace = RevealRouting.replacesPolicyBarWithPanel(current: current, openedBy: by,
+                requested: all, reason: .doubleClick, target: target)
+            #expect(replace)
+            if replace { #expect(machine.handle(.concealRequested).contains(.conceal)) }
+            _ = machine.handle(.revealRequested(all, .doubleClick))
+            #expect(machine.handle(.transitionSettled).contains(.reveal(all)))
+            _ = machine.handle(.transitionSettled)
+            #expect(machine.state == .revealed(sections: all, reason: .doubleClick))
+            #expect(RevealRouting.destination(for: .doubleClick, target: target) == .panel)
+        }
+    }
+
+    @Test func onlyExplicitAlwaysHiddenPanelRequestsReplacePolicyBar() {
+        let all: Set<Section> = [.hidden, .alwaysHidden]
+        for reason in [RevealReason.doubleClick, .statusItem, .hotkey] {
+            #expect(RevealRouting.replacesPolicyBarWithPanel(current: [.hidden], openedBy: .displayPolicy,
+                requested: all, reason: reason, target: .row))
+        }
+        #expect(!RevealRouting.replacesPolicyBarWithPanel(current: [.hidden], openedBy: .displayPolicy,
+            requested: all, reason: .doubleClick, target: .menuBar))
+        #expect(!RevealRouting.replacesPolicyBarWithPanel(current: [.hidden], openedBy: .click,
+            requested: all, reason: .doubleClick, target: .row))
+        #expect(!RevealRouting.replacesPolicyBarWithPanel(current: all, openedBy: .displayPolicy,
+            requested: all, reason: .doubleClick, target: .row))
+        #expect(!RevealRouting.replacesPolicyBarWithPanel(current: [.hidden], openedBy: .displayPolicy,
+            requested: [.hidden], reason: .doubleClick, target: .row))
+        #expect(!RevealRouting.replacesPolicyBarWithPanel(current: [.hidden], openedBy: .displayPolicy,
+            requested: all, reason: .settingsPreview, target: .row))
+    }
+
+    @Test func nativeShowAllBarCanRehideAlwaysHiddenWithoutConcealingHidden() {
+        var machine = RehideStateMachine(policy: RehidePolicy(autoRehide: true, delay: 1))
+        _ = machine.handle(.revealRequested([.hidden, .alwaysHidden], .doubleClick))
+        _ = machine.handle(.transitionSettled)
+        #expect(!RevealRouting.displayPolicyHoldsReveal(behavior: .alwaysShowAll,
+            anchored: false, panelShowsReveal: false, sections: [.hidden, .alwaysHidden]))
+        #expect(machine.handle(.narrowRequested([.hidden], .displayPolicy)).contains(.narrow([.hidden])))
+        _ = machine.handle(.transitionSettled)
+        #expect(machine.state == .revealed(sections: [.hidden], reason: .displayPolicy))
+        #expect(RevealRouting.displayPolicyHoldsReveal(behavior: .alwaysShowAll,
+            anchored: false, panelShowsReveal: false, sections: [.hidden]))
+    }
+
+    @Test func showAllPolicyKeepsOnlyTheUnanchoredNativeBarOpen() {
+        for behavior in [DisplayBehavior.alwaysShowAll, .collapse] {
+            for anchored in [false, true] {
+                #expect(!RevealRouting.displayPolicyHoldsReveal(behavior: behavior,
+                    anchored: anchored, panelShowsReveal: true, sections: [.hidden, .alwaysHidden]))
+                #expect(RevealRouting.displayPolicyHoldsReveal(behavior: behavior,
+                    anchored: anchored, panelShowsReveal: false, sections: [.hidden]) == (behavior == .alwaysShowAll && !anchored))
+            }
+        }
+    }
+
+    @Test func alwaysHiddenPanelCanConcealAfterItsDelayOnShowAllDisplay() {
+        var machine = RehideStateMachine(policy: RehidePolicy(autoRehide: true, delay: 1))
+        let now = Date()
+        _ = machine.handle(.revealRequested([.hidden, .alwaysHidden], .doubleClick), now: now)
+        #expect(machine.handle(.transitionSettled, now: now).contains(.armTimer(now.addingTimeInterval(1))))
+        // The policy holds the native baseline open, never a panel and never
+        // an Always Hidden reveal, so this one is free to conceal on time.
+        #expect(!RevealRouting.displayPolicyHoldsReveal(behavior: .alwaysShowAll,
+            anchored: false, panelShowsReveal: true, sections: [.hidden, .alwaysHidden]))
+        #expect(machine.handle(.trigger(.delayExpired), now: now.addingTimeInterval(1)).contains(.conceal))
+    }
+
+    @Test func aRequestCarryingAlwaysHiddenIsNeverSuppressed() {
+        // Empty-space double-clicks use doubleClick; chevron double-clicks
+        // and Option-clicks use statusItem.
+        for reason in [RevealReason.doubleClick, .statusItem, .click] {
+            for target in RevealTarget.allCases {
+                #expect(!RevealRouting.suppressesPanelClick(reason, sections: [.hidden, .alwaysHidden],
+                    behavior: .alwaysShowAll, target: target))
+            }
+        }
+    }
+
+    @Test func aChevronClickOnAShowAllDisplayIsNeverSuppressed() {
+        // #96: its Hidden icons are out already, so the click is for Always
+        // Hidden, in that display's "Show hidden icons in". Suppressing it
+        // left the chevron inert on exactly those displays.
+        for target in RevealTarget.allCases {
+            #expect(!RevealRouting.suppressesPanelClick(.statusItem, sections: [.hidden],
+                behavior: .alwaysShowAll, target: target))
+        }
+        #expect(RevealRouting.clickWidensToAlwaysHidden(.statusItem, sections: [.hidden],
+                                                        behavior: .alwaysShowAll))
+    }
+
+    @Test func aWideningClickIsNeverAlsoASuppressedOne() {
+        // The order in `toggle` depends on it: whatever widens must survive
+        // the suppression that follows, on every target and behavior.
+        let reasons: [RevealReason] = [.click, .doubleClick, .statusItem, .hover,
+                                       .hotkey, .barDrag, .displayPolicy, .settingsPreview, .itemInBar]
+        for reason in reasons {
+            for behavior in [DisplayBehavior.alwaysShowAll, .collapse] {
+                for target in RevealTarget.allCases {
+                    guard RevealRouting.clickWidensToAlwaysHidden(reason, sections: [.hidden],
+                                                                  behavior: behavior) else { continue }
+                    #expect(!RevealRouting.suppressesPanelClick(reason, sections: [.hidden],
+                        behavior: behavior, target: target))
+                }
+            }
+        }
+    }
+
+    @Test func onlyAnEmptyBarClickIsSuppressedOnAShowAllDisplay() {
+        // Named one by one rather than against the rule itself: a test that
+        // restates the predicate passes whatever the predicate says.
+        for target in [RevealTarget.panel, .row] {
+            #expect(RevealRouting.suppressesPanelClick(.click, sections: [.hidden],
+                behavior: .alwaysShowAll, target: target))
+            #expect(RevealRouting.suppressesPanelClick(.doubleClick, sections: [.hidden],
+                behavior: .alwaysShowAll, target: target))
+        }
+        // Native bar mode has no panel to open, and a collapsing display
+        // has icons to reveal.
+        #expect(!RevealRouting.suppressesPanelClick(.click, sections: [.hidden],
+            behavior: .alwaysShowAll, target: .menuBar))
+        for target in RevealTarget.allCases {
+            for reason in [RevealReason.click, .doubleClick, .statusItem, .hover, .hotkey,
+                           .barDrag, .displayPolicy, .settingsPreview, .itemInBar] {
+                #expect(!RevealRouting.suppressesPanelClick(reason, sections: [.hidden],
+                    behavior: .collapse, target: target))
+            }
+        }
+        // Nothing that is not a click in the bar is suppressed anywhere.
+        for target in RevealTarget.allCases {
+            for reason in [RevealReason.hover, .hotkey, .barDrag, .displayPolicy,
+                           .settingsPreview, .itemInBar] {
+                #expect(!RevealRouting.suppressesPanelClick(reason, sections: [.hidden],
+                    behavior: .alwaysShowAll, target: target))
+            }
+        }
+    }
+
+    @Test func clickSuppressionFollowsTheDisplaysOwnBehaviorAndLayout() {
+        var settings = SettingsStore()
+        settings.hiddenIconsIn = .panel
+        settings.displayOverrides["external"] = .alwaysShowAll
+        settings.displayOverrides["builtin"] = .collapse
+        func suppressed(_ uuid: String) -> Bool {
+            RevealRouting.suppressesPanelClick(.click, sections: [.hidden],
+                behavior: settings.behavior(forDisplayUUID: uuid),
+                target: settings.revealTarget(forDisplayUUID: uuid))
+        }
+        #expect(suppressed("external"))
+        #expect(!suppressed("builtin"))
+        settings.displayRevealTargets["external"] = .row
+        #expect(suppressed("external"))
+        settings.displayRevealTargets["external"] = .menuBar
+        #expect(!suppressed("external"))
+    }
+
+    @Test func clickCenteringIsOptInAndNeverMovesAnOpenPanel() {
+        let reasons: [RevealReason?] = [nil, .click, .doubleClick, .statusItem, .hover,
+                                      .hotkey, .barDrag, .displayPolicy, .settingsPreview, .itemInBar]
+        for reason in reasons {
+            #expect(!RevealRouting.centersPanelOnClick(reason, enabled: false, isOpen: false))
+            #expect(!RevealRouting.centersPanelOnClick(reason, enabled: true, isOpen: true))
+            #expect(RevealRouting.centersPanelOnClick(reason, enabled: true, isOpen: false)
+                    == (reason == .click || reason == .doubleClick))
+        }
+    }
+
     // A reveal a person asks for follows the setting; the menu bar target is
     // the bar for every reason.
     private func followsTheSetting(_ reason: RevealReason) {
@@ -142,5 +317,26 @@ import Testing
         #expect(!RevealRouting.clickWidensToAlwaysHidden(.hover, sections: [.hidden], behavior: .alwaysShowAll))
         #expect(!RevealRouting.clickWidensToAlwaysHidden(.hotkey, sections: [.hidden], behavior: .alwaysShowAll))
         #expect(!RevealRouting.clickWidensToAlwaysHidden(.statusItem, sections: [.hidden, .alwaysHidden], behavior: .alwaysShowAll))
+    }
+
+    @Test func onlyABarClickCentresThePanel() {
+        #expect(RevealRouting.centersPanelOnClick(.click, enabled: true, isOpen: false))
+        #expect(RevealRouting.centersPanelOnClick(.doubleClick, enabled: true, isOpen: false))
+        // The chevron, a hover and the hotkey keep the anchor they already had.
+        for reason in [RevealReason.statusItem, .hover, .hotkey, .barDrag, .itemInBar] {
+            #expect(!RevealRouting.centersPanelOnClick(reason, enabled: true, isOpen: false))
+        }
+        #expect(!RevealRouting.centersPanelOnClick(nil, enabled: true, isOpen: false))
+    }
+
+    @Test func offBySettingTheClickChangesNothing() {
+        #expect(!RevealRouting.centersPanelOnClick(.click, enabled: false, isOpen: false))
+        #expect(!RevealRouting.centersPanelOnClick(.doubleClick, enabled: false, isOpen: false))
+    }
+
+    // Aiming at a tile means clicking the bar behind an open panel: it must not jump.
+    @Test func anOpenPanelStaysPutWhenTheBarIsClickedAgain() {
+        #expect(!RevealRouting.centersPanelOnClick(.click, enabled: true, isOpen: true))
+        #expect(!RevealRouting.centersPanelOnClick(.doubleClick, enabled: true, isOpen: true))
     }
 }

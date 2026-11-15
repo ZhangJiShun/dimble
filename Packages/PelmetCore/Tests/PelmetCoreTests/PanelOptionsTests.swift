@@ -9,6 +9,7 @@ import Testing
 
     @Test func defaultsAreCompactAutoAndFolded() throws {
         let options = PanelOptions()
+        #expect(!options.centersOnClick)
         #expect(!options.showsNames)
         #expect(options.columnsWithNames == nil && options.columnsCompact == nil)
         #expect(!options.separatorsBreakRows)
@@ -16,12 +17,20 @@ import Testing
         #expect(!options.alwaysHiddenOpen)
         #expect(options.alwaysHiddenFold == .tile)
         #expect(!options.showsClosedApps)
+        #expect(!options.showsSettingsButton)
         #expect(PanelOptions.autoColumns == 5)
         #expect(try decode("{}") == options)
     }
 
+    @Test func invalidClickCenteringFallsBackWithoutLosingOtherSettings() throws {
+        let options = try decode(#"{"centersOnClick":"yes","showsNames":true}"#)
+        #expect(!options.centersOnClick)
+        #expect(options.showsNames)
+    }
+
     @Test func roundTrips() throws {
         var options = PanelOptions()
+        options.centersOnClick = true
         options.showsNames = true
         options.columnsWithNames = 4
         options.columnsCompact = 7
@@ -30,6 +39,7 @@ import Testing
         options.alwaysHiddenOpen = true
         options.alwaysHiddenFold = .handle
         options.showsClosedApps = true
+        options.showsSettingsButton = true
         let back = try JSONDecoder().decode(PanelOptions.self, from: JSONEncoder().encode(options))
         #expect(back == options)
     }
@@ -39,7 +49,7 @@ import Testing
         let options = try decode(#"""
         {"showsNames":"yes","columnsWithNames":6,"columnsCompact":"wide",
          "separatorsBreakRows":true,"alwaysHidden":"tucked","alwaysHiddenOpen":true,
-         "alwaysHiddenFold":"drawer"}
+         "alwaysHiddenFold":"drawer","showsSettingsButton":"on"}
         """#)
         #expect(options.showsNames == false)
         #expect(options.columnsWithNames == 6)
@@ -48,6 +58,7 @@ import Testing
         #expect(options.alwaysHidden == .folded)
         #expect(options.alwaysHiddenOpen)
         #expect(options.alwaysHiddenFold == .tile)
+        #expect(!options.showsSettingsButton)
     }
 
     @Test func aMissingFieldKeepsTheOthers() throws {

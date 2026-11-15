@@ -16,6 +16,38 @@ import AppKit
 import PelmetCore
 import PelmetEngine
 
+/// Names learned from the pills macOS drew, by bundle id. The agent's log
+/// carries ids only, and LaunchServices will not serve the placeholder
+/// bundles macOS keeps for mirrored iPhone apps — `urlsForApplications` for
+/// com.google.GoogleMobile returns none, and the Daemon Container holding
+/// its Google.app is off limits (2026-11-07) — so a pill's own AX
+/// description is the one place a phone app's name appears on this Mac.
+/// Kept so the row for an activity macOS has since taken off the bar still
+/// says what it is.
+@MainActor
+enum LiveActivityNames {
+    private static let key = "pelmet.liveActivityNames.v1"
+    /// Newest last. A pair is two short strings; the cap is there so a Mac
+    /// that sees hundreds over a year doesn't carry them all.
+    private static let cap = 32
+    private static var pairs: [[String]] = (UserDefaults.standard.array(forKey: key) as? [[String]]) ?? []
+
+    static func name(for bundle: String) -> String? {
+        pairs.last { $0.count == 2 && $0[0] == bundle }?[1]
+    }
+
+    /// True when this is news, so the caller can say so and redraw.
+    @discardableResult
+    static func learn(_ bundle: String, as learned: String) -> Bool {
+        guard !bundle.isEmpty, !learned.isEmpty, name(for: bundle) != learned else { return false }
+        pairs.removeAll { $0.first == bundle }
+        pairs.append([bundle, learned])
+        if pairs.count > cap { pairs.removeFirst(pairs.count - cap) }
+        UserDefaults.standard.set(pairs, forKey: key)
+        return true
+    }
+}
+
 @MainActor
 final class LiveActivityStatus {
     private(set) var activities = LiveActivities() {
@@ -37,7 +69,11 @@ final class LiveActivityStatus {
     /// are newer than it, so they fold in on top of it.
     private var recovering = false
     private var pending: [Entry] = []
-    private var restarts = 0
+    /// The growing wait between reopening the stream, reset by a stream
+    /// that stayed up (`StreamRestartBackoff`).
+    private var backoff = StreamRestartBackoff()
+    /// When the running child opened, for that reset.
+    private var streamOpenedAt: Date?
     /// When the stream last ended, until a new one is running: a restart
     /// replays the log only from then (`recover(since:)`).
     private var gapStart: Date?
@@ -158,16 +194,25 @@ final class LiveActivityStatus {
 
     /// Debug: `open -a Dimble --args -pelmet.debug.fakeLiveActivity <bundle id>`
     /// starts one activity of that app at boot, read through the parser
-    /// from the lines a real start logs, so the item and its lift can be
-    /// tried with nothing running. It ends the way a real one does: the
-    /// agent restarting, or its lifetime.
+    /// from the lines a real start logs, so the item, its menu and its lift
+    /// can be tried with nothing running. Several ids, comma separated,
+    /// start one each a second apart (oldest first), which is what the menu
+    /// needs to show its two slots and the rest under them. They end the way
+    /// a real one does: the agent restarting, or their lifetime.
     private static func addDebugActivity(to activities: inout LiveActivities) {
-        guard let bundle = UserDefaults.standard.string(forKey: "pelmet.debug.fakeLiveActivity"), !bundle.isEmpty else { return }
+        guard let setting = UserDefaults.standard.string(forKey: "pelmet.debug.fakeLiveActivity") else { return }
+        let bundles = setting.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !bundles.isEmpty else { return }
         let agent = agentPID() ?? 0
-        for line in LiveActivities.startLines(id: "DEB06106-0000-4000-8000-000000000106", requester: bundle) {
-            activities.read(line, at: Date(), agent: agent)
+        for (index, bundle) in bundles.enumerated() {
+            // The parser keys on the first eight digits, so they are what has
+            // to differ: one id per bundle, not one id for all of them.
+            let id = String(format: "DEB0610%X-0000-4000-8000-000000000106", index)
+            for line in LiveActivities.startLines(id: id, requester: bundle) {
+                activities.read(line, at: Date().addingTimeInterval(Double(index) - Double(bundles.count)), agent: agent)
+            }
         }
-        PelmetLog.log("liveactivity: debug — a fake activity of \(bundle) running")
+        PelmetLog.log("liveactivity: debug — fake activities running: \(bundles.joined(separator: ", "))")
     }
 
     /// The running MenuBarAgent's pid; nil when it isn't up.
@@ -208,7 +253,6 @@ final class LiveActivityStatus {
         process.standardOutput = pipe
         let errors = Pipe()
         process.standardError = errors
-        let startedAt = Date()
         let lines = FocusStatus.LineSplitter()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
@@ -232,24 +276,24 @@ final class LiveActivityStatus {
             // Why `log` quit, when it says (it has a "Must be admin" refusal).
             let why = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
                 .split(separator: "\n").first.map(String.init) ?? ""
-            let ranFor = Date().timeIntervalSince(startedAt)
-            Task { @MainActor [weak self] in self?.streamEnded(why, ranFor: ranFor) }
+            Task { @MainActor [weak self] in self?.streamEnded(why) }
         }
         do {
             try process.run()
             stream = process
+            streamOpenedAt = Date()
             gapStart = nil
         } catch {
             // Retried like a stream that ended.
             PelmetLog.log("liveactivity: log stream failed — \(error.localizedDescription)")
-            streamEnded("could not start (\(error.localizedDescription))", ranFor: 0)
+            streamEnded("could not start (\(error.localizedDescription))")
         }
     }
 
     /// logd restarts (or a kill) end the child; back off like FocusStatus.
     /// The replay on the way back reads only the gap, to catch an end it
     /// swallowed.
-    private func streamEnded(_ why: String, ranFor: TimeInterval) {
+    private func streamEnded(_ why: String) {
         stream = nil
         guard !stopped else { return }
         // A standard account: `log stream` is refused, and will be every
@@ -262,10 +306,12 @@ final class LiveActivityStatus {
         // Where the replay on the way back starts: the first end of a run
         // of failures, until a stream is running again.
         if gapStart == nil { gapStart = Date() }
-        // A stream that stayed up a while was healthy: start the backoff over.
-        if ranFor >= FocusStatus.stableRun { restarts = 0 }
-        restarts += 1
-        let delay = min(60, 2 << min(restarts, 5))
+        // A child that ran a while ended for a reason of its own (logd
+        // restarted, the Mac slept), not because `log stream` is refused
+        // here, so its uptime starts the wait over.
+        let uptime = streamOpenedAt.map { Date().timeIntervalSince($0) }
+        streamOpenedAt = nil
+        let delay = backoff.delay(afterUptime: uptime)
         PelmetLog.log("liveactivity: log stream ended\(why.isEmpty ? "" : " (\(why.prefix(120)))"), retry in \(delay)s")
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
@@ -318,7 +364,10 @@ final class LiveActivityStatus {
               let pid = object["processID"] as? Int
         else { return nil }
         // `log`'s ndjson timestamps: "2026-10-27 08:16:19.694652-0400".
-        let date = (object["timestamp"] as? String).flatMap(FocusStatus.logTimestamps.date(from:)) ?? Date()
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZ"
+        let date = (object["timestamp"] as? String).flatMap(formatter.date(from:)) ?? Date()
         return Entry(message: message, date: date, agent: Int32(pid))
     }
 }

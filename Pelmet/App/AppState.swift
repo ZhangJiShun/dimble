@@ -98,6 +98,8 @@ final class AppState {
     /// bar reads concealed (the "Show Live Activities" setting).
     @ObservationIgnored lazy var liveMirror = LiveMirror(appState: self)
     @ObservationIgnored private lazy var barPresenter = BarPresenter(transitions: transitions)
+    @ObservationIgnored private let sectionDivider = SectionDividerOverlay()
+    @ObservationIgnored private var sectionDividerRefresh: Task<Void, Never>?
     /// The hidden icons as tiles under the chevron (docs/PANEL-PLAN.md §5).
     @ObservationIgnored lazy var panelPresenter = PanelPresenter(appState: self)
     /// Who drew the reveal that is up, so the conceal goes to the same one.
@@ -485,9 +487,11 @@ final class AppState {
         let clockRelay = ClockClickRelay { [weak self] point, pointer, option in
             self?.clockClicked(at: point, pointer: pointer, option: option)
         }
-        // The tap always runs (it is also the active-display observer);
-        // the setting only decides whether a clock click is relayed.
-        clockRelay.setEnabled(settings.clockClickOpensNotificationCenter)
+        // The tap always runs (it is also the active-display observer).
+        // Relaying is no longer a choice: without it the clock is dead while
+        // icons are hidden, which is never what anyone wants. Screen
+        // Recording is what decides whether the blink is covered.
+        clockRelay.setEnabled(true)
         self.clockRelay = clockRelay
 
         let hotkey = HotkeyManager { [weak self] slot in
@@ -894,6 +898,14 @@ final class AppState {
                 self?.scheduleAnchorCheck("display change")
             }
         })
+        // A full-screen app takes the bar with no screens change and no icon
+        // snapshot: the space change is when the divider's visibility check is
+        // worth running again (it replaced a 0.5s poll — don't bring that back).
+        chevronHostObservers.append(workspace.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshSectionDivider() }
+        })
         chevronHostObservers.append(DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main
         ) { [weak self] _ in
@@ -1152,15 +1164,31 @@ final class AppState {
 
     // MARK: - Intents (UI + monitors call these)
 
+    /// Check the pointer display before state changes or Live Mirror can
+    /// hide icons for a rejected panel.
+    private func suppressesPanelClick(_ reason: RevealReason, sections: Set<PelmetCore.Section>) -> Bool {
+        let uuid = NSScreen.underPointer?.displayUUIDString
+        return RevealRouting.suppressesPanelClick(reason, sections: sections,
+            behavior: settings.behavior(forDisplayUUID: uuid),
+            target: settings.revealTarget(forDisplayUUID: uuid))
+    }
+
     func toggle(reason: RevealReason, sections: Set<PelmetCore.Section> = [.hidden]) {
         if liveMirror.intercepts(reveal: reason, sections: sections, how: .toggle) { return }
         // A chevron click on a display that shows all icons opens Always
-        // Hidden there, in that display's "Show hidden icons in" (#96). A plain toggle
-        // asked for nothing when anchored, and closed the icons that display
-        // shows when the pointer's display decided.
+        // Hidden there, in that display's "Show hidden icons in" (#96). A plain
+        // toggle asked for nothing when anchored, and closed the icons that
+        // display shows when the pointer's display decided. This widening
+        // comes BEFORE the suppression below, which reads the sections a
+        // reveal would carry: suppressed first, the chevron was inert there.
         if RevealRouting.clickWidensToAlwaysHidden(reason, sections: sections, behavior: pointerDisplayBehavior) {
             PelmetLog.log("toggle(\(reason)) on a display that shows all icons — Always Hidden too")
             toggleAll(reason: reason)
+            return
+        }
+        // What is left asks only for icons that display already shows.
+        if suppressesPanelClick(reason, sections: sections) {
+            PelmetLog.log("toggle(\(reason)) ignored — this display shows these icons already")
             return
         }
         if anchoredShowAllAsksNothing(sections, reason) { return }
@@ -1211,6 +1239,15 @@ final class AppState {
     func reveal(_ sections: Set<PelmetCore.Section>, reason: RevealReason) {
         if liveMirror.intercepts(reveal: reason, sections: sections, how: .reveal) { return }
         if anchoredShowAllAsksNothing(sections, reason) { return }
+        // Empty-space double-clicks bypass toggleAll, so replace the policy
+        // bar at this shared entry point.
+        if !transitions.anchored, pointerDisplayBehavior == .alwaysShowAll, revealPresenter === barPresenter,
+           case .revealed(let current, let by) = rehide.state,
+           RevealRouting.replacesPolicyBarWithPanel(current: current, openedBy: by, requested: sections,
+               reason: reason, target: revealDecision(for: reason).target) {
+            PelmetLog.log("reveal(\(reason)) — replace the policy's bar with the configured panel")
+            concealNow()
+        }
         PerfTrace.markTrigger("\(reason)")
         // The panel is up and this needs the real bar (⌘↩ in Search, an
         // Apply): the panel closes first and the reveal queues behind it. A
@@ -1236,15 +1273,7 @@ final class AppState {
         // third click. Closing Always Hidden goes back to the policy's
         // reveal, not to an empty bar.
         if !transitions.anchored, pointerDisplayBehavior == .alwaysShowAll, revealPresenter === barPresenter,
-           case .revealed(let current, let by) = rehide.state {
-            let target = revealDecision(for: reason).target
-            if by == .displayPolicy, !current.contains(.alwaysHidden),
-               RevealRouting.destination(for: reason, target: target) == .panel {
-                PelmetLog.log("toggleAll(\(reason)) off the anchor — the policy's bar goes, \(target.rawValue) opens")
-                concealNow()
-                reveal(all, reason: reason)
-                return
-            }
+           case .revealed(let current, _) = rehide.state {
             if current.contains(.alwaysHidden), current.contains(.hidden) {
                 dispatch(rehide.handle(.narrowRequested([.hidden], .displayPolicy)))
                 PelmetLog.log("toggleAll(\(reason)) off the anchor — narrowed to the policy's reveal, state=\(rehide.state)")
@@ -1656,12 +1685,27 @@ final class AppState {
     }
 
     func rehideTriggered(_ trigger: RehideTrigger) {
+        // Put away only the temporary Always Hidden section, preserving
+        // the show-all baseline.
+        if trigger == .delayExpired, rehide.policy.autoRehide,
+           !transitions.anchored, pointerDisplayBehavior == .alwaysShowAll,
+           revealPresenter === barPresenter,
+           case .revealed(let sections, _) = rehide.state, sections.contains(.alwaysHidden) {
+            PelmetLog.log("rehideTrigger(\(trigger)) state=\(rehide.state) — narrow to the policy's bar")
+            dispatch(rehide.handle(.narrowRequested([.hidden], .displayPolicy)))
+            return
+        }
         PelmetLog.log("rehideTrigger(\(trigger)) state=\(rehide.state)")
         dispatch(rehide.handle(.trigger(trigger)))
     }
 
     func pointerReturnedToBand() {
         dispatch(rehide.handle(.pointerReturned))
+        // Under menu-bar auto-hide the bar is only drawn while the pointer is
+        // at the top edge, and nothing else tells us it came or went: the
+        // divider's own visibility check runs on both crossings instead of a
+        // timer polling for it.
+        refreshSectionDivider()
     }
 
     func pointerEnteredHoverZone() {
@@ -1670,6 +1714,8 @@ final class AppState {
 
     func pointerLeftBand() {
         dispatch(rehide.handle(.pointerLeft))
+        // The other half of the auto-hide pair: the bar goes with the pointer.
+        refreshSectionDivider()
     }
 
     /// Anything is out: a section, or only icons Show in Menu Bar brought out.
@@ -1749,7 +1795,7 @@ final class AppState {
         extras?.apply(
             model: settings.sectionModel,
             revealed: currentRevealedSections,
-            systemCameraPillVisible: systemCameraPillVisible
+            systemCameraPillVisible: freshSystemCameraPillVisible
         )
         separators?.apply(model: settings.sectionModel, revealed: currentRevealedSections)
     }
@@ -1799,7 +1845,7 @@ final class AppState {
         clockRelay?.reviveIfDead()
         bandMonitor?.reviveTapIfDead()
         panelPresenter.reviveTypingTapIfDead()
-        clockRelay?.setEnabled(settings.clockClickOpensNotificationCenter)
+        clockRelay?.setEnabled(true)
         bandMonitor?.accessibilityGranted()
         Task {
             guard engineStarted else { return }
@@ -1815,9 +1861,8 @@ final class AppState {
     private var registeredAlwaysHiddenHotkey: HotkeySpec?
     private var registeredNotificationCenterHotkey: HotkeySpec?
     private var registeredSearchHotkey: HotkeySpec?
-    /// The shortcut rides on the clock relay: off with it, not on its own.
     private var activeNotificationCenterHotkey: HotkeySpec? {
-        settings.clockClickOpensNotificationCenter ? settings.notificationCenterHotkey : nil
+        settings.notificationCenterHotkey
     }
 
     /// The Notification Center shortcut (#44): the OS one is refused while
@@ -2101,7 +2146,34 @@ final class AppState {
     /// moves the way a ⌥-click does. A click while it is up, or on its way,
     /// puts it back at once: the lift's state is read here, not asked of the
     /// engine, which is mid-converge for the whole reveal.
-    func liftHideForLiveActivities() {
+    /// Whether the real pills are on the bar as things stand: live mode keeps
+    /// them there under its covers, and a lift has let the assertion go for
+    /// them. The item's own glyph reads it, to count what macOS is NOT
+    /// showing rather than what it is.
+    var liveActivityPillsShowing: Bool { liveMirror.isActive || transitions.liftUp }
+
+    /// A row of the item's menu, for one of the pills macOS is drawing:
+    /// under live mode, or a lift already up, the pill is on the bar (the
+    /// cover is a window of ours, which an AX press goes straight past), so
+    /// it is pressed where it is. Off the bar, the assertion has to go first
+    /// and the press waits for the lift to bring it back.
+    func openLiveActivityPill(named: String?) {
+        guard liveActivityPillsShowing else {
+            liftHideForLiveActivities(then: .press(named))
+            return
+        }
+        Task { @MainActor in
+            let result = await Task.detached(priority: .userInitiated) { Self.pressLiveActivityPill(named: named) }.value
+            PelmetLog.log("liveactivity: press \(named ?? "the only pill") on the bar — \(result)")
+        }
+    }
+
+    /// What the lift is for: the pills themselves, or one of them opened.
+    /// `.press(nil)` is a row of an app this Mac doesn't have, which nothing
+    /// in AX ties to its pill (`pressLiveActivityPill`).
+    enum LiveActivityLift { case justShow, press(String?) }
+
+    func liftHideForLiveActivities(then: LiveActivityLift = .justShow) {
         if liveMirror.interceptsItemClick() { return }
         let all: Set<PelmetCore.Section> = [.hidden, .alwaysHidden]
         if transitions.liftUp {
@@ -2122,14 +2194,14 @@ final class AppState {
                 // Out already: no reveal is coming to carry the lift.
                 PelmetLog.log("liveactivity: lift — the bar is out, the assertion goes")
                 await transitions.liftOutBar()
-                checkLiftBroughtPills()
+                checkLiftBroughtPills(then: then)
                 return
             }
             PelmetLog.log("liveactivity: lift — everything out with the assertion down")
             reveal(all, reason: .itemInBar)
             // After the request: the reveal's task, which runs later, takes it.
             transitions.liftRequestedAt = Date()
-            checkLiftBroughtPills()
+            checkLiftBroughtPills(then: then)
         }
     }
 
@@ -2137,7 +2209,7 @@ final class AppState {
     /// gives them or until the re-hide. A lift that brings none back was for
     /// an activity that's over. `liftUp` also covers a request no reveal took,
     /// where the assertion never went, so the wait starts at `lifted`.
-    private func checkLiftBroughtPills() {
+    private func checkLiftBroughtPills(then: LiveActivityLift = .justShow) {
         Task { @MainActor [weak self] in
             var liftedAt: Date?
             while liftedAt.map({ Date().timeIntervalSince($0) < LiveMirror.noPillGrace }) ?? true {
@@ -2145,9 +2217,20 @@ final class AppState {
                 guard let self, self.transitions.liftUp else { break }
                 guard self.transitions.lifted else { continue }
                 if liftedAt == nil { liftedAt = Date() }
-                let found = await Task.detached(priority: .userInitiated) { !PillProbe.copies().isEmpty }.value
+                // The names come back with the pills: live mode isn't running
+                // here (its mirror would have handed them over), so this is
+                // the one read that can learn what they are called.
+                let pills = await Task.detached(priority: .userInitiated) {
+                    PillProbe.copies().filter { !$0.system }.map(\.name)
+                }.value
+                let found = !pills.isEmpty
                 if found {
+                    extras?.learnLiveActivityNames(from: pills.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } })
                     PelmetLog.log("liveactivity: the lift brought a pill back")
+                    if case .press(let name) = then {
+                        let result = await Task.detached(priority: .userInitiated) { Self.pressLiveActivityPill(named: name) }.value
+                        PelmetLog.log("liveactivity: press \(name ?? "the only pill") — \(result)")
+                    }
                     return
                 }
             }
@@ -2155,6 +2238,18 @@ final class AppState {
             PelmetLog.log("liveactivity: the lift brought no pill back")
             self?.liveActivityPillsMissing()
         }
+    }
+
+    /// Opens the card of the pill a menu row named, through the bar's own
+    /// copy of it looked up fresh (`PillProbe.press`): the window copies can
+    /// press without drawing a card.
+    nonisolated private static func pressLiveActivityPill(named: String?) -> String {
+        let bounds = CGDisplayBounds(CGMainDisplayID())
+        // No name means no app of that id on this Mac, so nothing in AX ties
+        // the activity to its pill: press the pill only when there is one to
+        // mean, rather than open the wrong app's card.
+        if named == nil, PillProbe.pills(in: bounds).count != 1 { return "nothing names this one, and more than one pill is up" }
+        return PillProbe.press(in: bounds, named: named, kept: nil).result
     }
 
     /// The assertion was down and no pill came: what only came from before
@@ -2170,8 +2265,73 @@ final class AppState {
 
     /// The Live Activities watcher saw an activity start or end: `LiveMirror`
     /// enters or leaves when the bar allows, if the setting is on.
-    func liveActivitiesChanged(running: Bool, count: Int = 0) {
-        liveMirror.activitiesChanged(running: running, count: count)
+    func liveActivitiesChanged(running: Bool, count: Int = 0, real: Int = 0) {
+        liveMirror.activitiesChanged(running: running, count: count, real: real)
+    }
+
+    /// The pills live mode has mirrors for, by the name macOS gives each one
+    /// (bar order, leftmost first) — what Settings lists a switch for. Live
+    /// mode's own reading, so it's empty while live mode isn't running.
+    private(set) var liveActivityNames: [String] = []
+
+    /// Live mode is mirroring macOS's own camera and mic pill right now.
+    private(set) var liveMirrorsSystemPill = false
+
+    /// What this launch has learned about the running macOS by trying it.
+    /// Read it instead of a version number — `OSTraits` says why.
+    ///
+    /// A trait can be pinned at launch, which is how an older macOS's path
+    /// gets run without an older macOS:
+    /// `defaults write app.fif7y.Pelmet pelmet.debug.osTrait.systemPillSurvivesAssertion -bool NO`.
+    /// There is no second Mac here held at 27.2, and those branches are the
+    /// ones no test on this machine can reach, so every trait is forceable
+    /// on purpose. Nothing in the app writes one.
+    private(set) var osTraits: OSTraits = {
+        var traits = OSTraits()
+        for trait in OSTraits.Trait.allCases {
+            let key = "pelmet.debug.osTrait.\(trait.rawValue)"
+            guard UserDefaults.standard.object(forKey: key) != nil else { continue }
+            let forced = UserDefaults.standard.bool(forKey: key)
+            traits.pin(trait, forced)
+            PelmetLog.log("ostraits: \(trait.rawValue) pinned to \(forced) by \(key)")
+        }
+        return traits
+    }()
+
+    /// Records an observation about the running macOS, and logs the ones
+    /// that move a trait. Safe to call from a tick: a repeat is silent.
+    func learn(_ trait: OSTraits.Trait, _ answer: Bool, why: String) {
+        if let line = osTraits.learn(trait, answer, why: why) { PelmetLog.log(line) }
+    }
+
+    /// Live mode picked that pill up or let it go: the Camera & mic item
+    /// has to be re-decided, and nothing else would ask.
+    func systemPillMirrorChanged(_ on: Bool) {
+        guard on != liveMirrorsSystemPill else { return }
+        liveMirrorsSystemPill = on
+        // Having a mirror of it is proof this macOS leaves Apple's pill on
+        // the bar under an assertion (27.3 and up). Losing the mirror
+        // proves nothing: the camera may simply have stopped.
+        if on { learn(.systemPillSurvivesAssertion, true, why: "live mode is mirroring it") }
+        extras?.systemPillChanged()
+    }
+
+    /// Live mode held the bar for its whole grace and no pill came at all.
+    /// With the camera or mic live that is the 27.2 behaviour: the
+    /// assertion takes Apple's pill off the bar, so there was never going
+    /// to be anything to mirror. Learning it here stops the next camera
+    /// session from sending live mode after that pill, which costs a screen
+    /// capture and lights the recording indicator each time.
+    func noPillFoundWhileLiveModeHeldTheBar() {
+        guard extras?.cameraOrMicIsLive == true else { return }
+        learn(.systemPillSurvivesAssertion, false,
+              why: "the assertion was down with the camera or mic live and no pill came")
+    }
+
+    func liveActivityNamesChanged(_ names: [String]) {
+        guard names != liveActivityNames else { return }
+        liveActivityNames = names
+        extras?.learnLiveActivityNames(from: names)
     }
 
     /// A lift's re-hide has come to rest (`TransitionCoordinator.endLift`):
@@ -2180,7 +2340,22 @@ final class AppState {
     func liftSettled() {
         overflowHoldEnded()
         guard !isTransitioning else { return }
-        extras?.apply(model: settings.sectionModel, revealed: currentRevealedSections, systemCameraPillVisible: systemCameraPillVisible)
+        extras?.apply(model: settings.sectionModel, revealed: currentRevealedSections, systemCameraPillVisible: freshSystemCameraPillVisible)
+    }
+
+    /// `systemCameraPillVisible`, with Apple's pill looked at again rather
+    /// than read out of its half-second cache.
+    ///
+    /// Both callers run right after the bar changed under them, and up to
+    /// macOS 27.2 an assertion takes Apple's pill off the bar — so a cached
+    /// answer from the apply on the other side of the conceal could say the
+    /// pill is there when it has just gone, and Dimble's own camera
+    /// indicator would stand aside for nothing. No privacy indicator at
+    /// all, until the next edge asked again. On 27.3 the pill stays through
+    /// the conceal, so the fresh read says what the cache said.
+    private var freshSystemCameraPillVisible: Bool {
+        AudioVideoPill.invalidateOnBar()
+        return systemCameraPillVisible
     }
 
     /// Set while the Camera & mic relay has the assertion down: Apple's
@@ -2195,7 +2370,7 @@ final class AppState {
     /// under a picture of the bar and back once the panel is up. A SharePlay
     /// session passes Apple's SharePlay icon ahead of the pill. False when
     /// no pill or panel showed, for the caller's fallback.
-    func openAudioVideoPill(near point: CGPoint, identifiers: [String] = [AudioVideoPill.identifier]) async -> Bool {
+    func openAudioVideoPill(near point: CGPoint, identifiers: [String] = AudioVideoPill.cameraIdentifiers) async -> Bool {
         guard !clockBlinkInFlight else {
             PelmetLog.log("audiovideo: blink in flight — press ignored")
             return true
@@ -2344,6 +2519,7 @@ final class AppState {
     /// — slider drags call this per tick, and each un-debounced tick paid a
     /// JSON save plus a full AX-walking converge that concluded "no-op".
     func settingsChanged() {
+        defer { refreshSectionDivider() }
         rehide.policy = settings.rehidePolicy
         if settings.showStatusItem, statusItem == nil {
             // A chevron switched on mid-session is a fresh registration the
@@ -2403,7 +2579,6 @@ final class AppState {
         let ownIDs = Set((extras?.managedItemIDs ?? []) + (separators?.managedItemIDs ?? []))
         // Separators are drawings: they move at Apply, never on their own.
         for id in ownIDs.subtracting(previousOwnIDs) where !id.isPelmetSeparator { placeOwnItemSoon(id) }
-        clockRelay?.setEnabled(settings.clockClickOpensNotificationCenter)
         settingsApplyWork?.cancel()
         settingsApplyWork = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
@@ -3779,7 +3954,24 @@ final class AppState {
     /// assertion held (a full reveal); Pelmet's indicator defers to it to
     /// avoid duplication. Not while the relay has it up for a click.
     var systemCameraPillVisible: Bool {
-        guard !audioVideoRelayActive, !transitions.liftKeepsCameraItem else { return false }
+        // The relay presses Pelmet's own item to open Apple's panel, so that
+        // item has to stay put until the press is done.
+        guard !audioVideoRelayActive else { return false }
+        // Live mode found the pill and is drawing it: that is the one answer
+        // with no AX walk, no half-second cache and no ghost behind it — a
+        // mirror exists only while the pill does. It also outranks
+        // `liftKeepsCameraItem`, whose `liveModeActive` term is from 27.2,
+        // when the assertion took Apple's pill off the bar and Pelmet's
+        // replica was the only camera indicator left. On 27.3 the pill stays
+        // and live mode draws it, so keeping the replica too is the two
+        // camera icons at once (Gab, 2026-11-06).
+        if liveMirrorsSystemPill { return true }
+        guard !transitions.liftKeepsCameraItem else { return false }
+        // macOS 27.3 hosts Apple's pill as a pill, which the engine's walk
+        // never reports, AND stopped taking it off the bar under an
+        // assertion — so the snapshot said "not there" while it stood right
+        // next to Pelmet's own, two camera icons at once (Gab, 2026-11-06).
+        if AudioVideoPill.onBar() { return true }
         return (snapshot?.items ?? []).contains {
             $0.id.rawValue.contains("menuextra.audiovideo") && $0.frame != nil
         }
@@ -3801,7 +3993,9 @@ final class AppState {
     /// own items follow them like any reveal: told "concealed" mid-pass,
     /// the extras the engine had just shown hid again and the bar bounced
     /// under the capture (2026-10-09).
-    @ObservationIgnored var picturePassSections: Set<PelmetCore.Section>?
+    @ObservationIgnored var picturePassSections: Set<PelmetCore.Section>? {
+        didSet { refreshSectionDivider() }
+    }
 
     /// What is revealed ON THE BAR. A reveal the panel draws leaves the bar
     /// concealed, so Pelmet's own items, covers and pictures stay put.
@@ -3824,6 +4018,24 @@ final class AppState {
         }
     }
 
+    private func refreshSectionDivider(snapshot fresh: EngineSnapshot? = nil) {
+        sectionDividerRefresh?.cancel()
+        guard !isTransitioning, !panelShowsReveal, picturePassSections == nil,
+              currentRevealedSections.contains(.alwaysHidden),
+              let snap = fresh ?? snapshot, snap.itemsAtRest else {
+            sectionDivider.hide()
+            return
+        }
+        sectionDividerRefresh = Task { [weak self] in
+            guard let self else { return }
+            var copies = await engine.barCopies()
+            guard !Task.isCancelled else { return }
+            // Individually revealed items and concealed copies must not create a false section boundary.
+            for id in snap.concealed.union(snap.shownAlone) { copies.removeValue(forKey: id) }
+            sectionDivider.update(model: settings.sectionModel, copies: copies)
+        }
+    }
+
     private func dispatch(_ effects: [RehideEffect]) {
         // Extras are NOT applied here: the engine's reflow companion applies
         // them inside the converge so their size change shares the assertion
@@ -3831,8 +4043,21 @@ final class AppState {
         // The chevron flips at transition START — settle-time flips read as an
         // unacknowledged click.
         defer {
+            refreshSectionDivider()
             statusItem?.updateSymbol(revealed: isRevealedOrRevealing)
             releaseOrphanedItemsInBar()
+        }
+        // The bar is about to move: bare bar the right-click tap was holding
+        // a claim on may be an icon by the time the button goes down (#140).
+        // Only the three effects that move it — the timer ones fire whenever
+        // the pointer crosses the band, which would leave no claim standing.
+        if effects.contains(where: {
+            switch $0 {
+            case .reveal, .conceal, .narrow: true
+            case .none, .armTimer, .cancelTimer: false
+            }
+        }) {
+            bandMonitor?.releaseRightClickClaim()
         }
         for effect in effects {
             switch effect {
@@ -4057,7 +4282,9 @@ final class AppState {
                 let panelHolds = self.panelShowsReveal && self.panelPresenter.holdsReveal
                 // An Apply pass needs the frames it measured to stay put.
                 let held = self.editorHoldsBar
-                    || (!self.transitions.anchored && self.pointerDisplayBehavior == .alwaysShowAll)
+                    || RevealRouting.displayPolicyHoldsReveal(behavior: self.pointerDisplayBehavior,
+                        anchored: self.transitions.anchored, panelShowsReveal: self.panelShowsReveal,
+                        sections: self.currentRevealedSections)
                     || self.applying
                     || panelHolds
                 // The band's reason reads the whole window list: only when
@@ -4863,8 +5090,15 @@ final class AppState {
         overflowTrappedItems = trappedItems
         guard trapped != overflowTrappedCount else { return }
         if (trapped > 0) != (overflowTrappedCount > 0) {
+            // With the frames: the read is an overlap test, and a report of
+            // an icon that plainly fits (#143) is answered by the x ranges
+            // it overlapped, which nothing else in the log carries.
+            let named = trappedItems.map { id -> String in
+                guard let f = framed.first(where: { $0.id == id })?.frame else { return id.rawValue }
+                return "\(id.rawValue) \(Int(f.minX))..\(Int(f.maxX))"
+            }
             PelmetLog.log(trapped > 0
-                ? "overflow: \(trapped) icon(s) behind the native « — \(trappedItems.map(\.rawValue).joined(separator: ", "))"
+                ? "overflow: \(trapped) icon(s) behind the native « — \(named.joined(separator: ", "))"
                 : "overflow: cleared")
         }
         overflowTrappedCount = trapped
@@ -4963,6 +5197,7 @@ final class AppState {
     /// `takenAt`.
     func updateSnapshot(_ snap: EngineSnapshot) {
         defer {
+            refreshSectionDivider(snapshot: snap)
             if transitions.anchored {
                 transitions.refreshHeld("items moved")
             } else if launchBaselineApplied, case .concealed = rehide.state, revealAnchored, !transitions.anchorTarget,

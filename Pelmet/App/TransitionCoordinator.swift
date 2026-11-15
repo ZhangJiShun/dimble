@@ -85,6 +85,10 @@ final class TransitionCoordinator {
     /// The cover was dropped for a changed backdrop and not retaken yet.
     private var revealCoverWanted = false
     private var precaptureInFlight = false
+    /// Whether the precapture in flight is the conceal's own — it waits for
+    /// the bar to go swap-quiet before it shoots, so a reveal cannot wait
+    /// for it (see `awaitCoverRetake`).
+    private var precaptureFollowsConceal = false
     /// Pictures of the last transition still on screen (cover lift, exit
     /// strip). See `awaitPreviousLift`.
     private var liftsInFlight = 0
@@ -298,6 +302,16 @@ final class TransitionCoordinator {
     /// bounded, so a slow capture degrades to the uncovered reveal it
     /// always was rather than holding the bar.
     private func awaitCoverRetake(style: RevealAnimation) async {
+        // The conceal's own precapture waits half a second for the bar to go
+        // swap-quiet and another 300ms for the fade to clear before it even
+        // shoots — longer than the whole budget here. A reveal that arrives
+        // while it is in flight could only wait the budget out and still find
+        // it "not ready": half a second of dead bar under a pointer that is
+        // already back on it (#141). Leave it be and take the live capture.
+        if precaptureInFlight, precaptureFollowsConceal {
+            PelmetLog.log("cover: the conceal's picture is still settling — the reveal goes on without it")
+            return
+        }
         guard revealCoverSnapshot.isEmpty, precaptureInFlight || (revealCoverWanted && style != .smooth) else { return }
         if !precaptureInFlight {
             PelmetLog.log("cover: retaking at the reveal")
@@ -325,6 +339,14 @@ final class TransitionCoordinator {
     /// reveal path floats it synchronously instead of paying ~100ms+ of SCK
     /// capture before the swap can even start (snappiness).
     private var revealCoverSnapshot: [ConcealGhostOverlay.BarSnapshot] = []
+    /// Why the last `freshEmptyBarSnapshots` turned the picture down, for
+    /// the `perf` line's cover detail. Measured 2026-11-14: a third of
+    /// hover reveals settle at 276ms against 87ms for the rest, and the
+    /// cover is nearly all of the gap (179ms against 17ms) — but the line
+    /// said only "live capture", and the two paths that did name a reason
+    /// fired 5 times between them against 61 slow reveals. So the two
+    /// silent ones say which they were.
+    private var lastCoverMiss: String?
     /// The primary-band rect the idle picture was captured with.
     private var revealCoverTakenRect: CGRect?
     /// The active display (see `AppState.lastMouseDownDisplay`) when each
@@ -706,8 +728,12 @@ final class TransitionCoordinator {
             backdropMayHaveChanged()
             await awaitCoverRetake(style: style)
             let emptyBar = freshEmptyBarSnapshots()
+            // Read now, not at the mark: the awaits below let another
+            // caller of freshEmptyBarSnapshots overwrite it.
+            let coverMiss = lastCoverMiss
             await hold(appState.barsKeptConcealed)
-            let coverSource = !emptyBar.isEmpty ? "precaptured" : style != .smooth ? "live capture" : "none"
+            var coverSource = !emptyBar.isEmpty ? "precaptured" : style != .smooth ? "live capture" : "none"
+            if emptyBar.isEmpty, let coverMiss { coverSource += ", \(coverMiss)" }
             if !emptyBar.isEmpty {
                 // The still shows the collapsed glyph; a hole over the
                 // glyph's core lets the live chevron (flipped at the swap)
@@ -1321,19 +1347,28 @@ final class TransitionCoordinator {
     /// to the blink's footprint — so the reveal path takes it `cropped`
     /// back to its own rect and the blink cuts its own cover out of it.
     private func freshEmptyBarSnapshots(cropped: Bool = true) -> [ConcealGhostOverlay.BarSnapshot] {
-        guard let first = revealCoverSnapshot.first,
-              Date().timeIntervalSince(first.takenAt) < AppTiming.revealCoverFreshness
-        else { return [] }
+        guard let first = revealCoverSnapshot.first else {
+            lastCoverMiss = "no picture"
+            return []
+        }
+        let age = Date().timeIntervalSince(first.takenAt)
+        guard age < AppTiming.revealCoverFreshness else {
+            lastCoverMiss = "picture \(Int(age))s old, over \(Int(AppTiming.revealCoverFreshness))s"
+            return []
+        }
         guard revealCoverActiveDisplay == appState?.lastMouseDownDisplay else {
+            lastCoverMiss = "picture from another active display"
             PelmetLog.log("cover: picture from another active display (\(revealCoverActiveDisplay ?? 0) → \(appState?.lastMouseDownDisplay ?? 0)), not used")
             return []
         }
         // The panel is not in the backdrop signature: a picture taken under
         // it is only true while it is open, and the other way round.
         guard revealCoverUnderPanel == ClockClickRelay.notificationCenterIsOpen() else {
+            lastCoverMiss = "picture taken with the panel \(revealCoverUnderPanel ? "open" : "closed")"
             PelmetLog.log("cover: picture taken with the panel \(revealCoverUnderPanel ? "open" : "closed"), not used")
             return []
         }
+        lastCoverMiss = nil
         guard cropped, let want = revealCoverRect, want != precaptureRect else { return revealCoverSnapshot }
         let narrowed = ConcealGhostOverlay.cropped(revealCoverSnapshot, toPrimaryX: want.minX...want.maxX)
         return narrowed.isEmpty ? revealCoverSnapshot : narrowed
@@ -2082,6 +2117,7 @@ final class TransitionCoordinator {
         precaptureGeneration &+= 1
         let generation = precaptureGeneration
         precaptureInFlight = true
+        precaptureFollowsConceal = afterConceal
         precaptureTask = Task { @MainActor in
             // A replaced capture leaves the flag to its replacement.
             defer { if generation == precaptureGeneration { precaptureInFlight = false } }
@@ -2795,6 +2831,7 @@ extension TransitionCoordinator {
         let under = empty.first { abs($0.windowFrame.minY - raw.windowFrame.minY) < 1 && $0.windowFrame.intersects(raw.windowFrame) }
         let scale = CGFloat(base.image.width) / base.windowFrame.width
         var pictures: [ItemID: ItemPictures.Picture] = [:]
+        var contaminated: [(ItemID, Double)] = []
         for (key, f) in items {
             // Exactly the item's frame, less a point a side: neighbouring
             // frames overlap by a point or two, and `cropped(toPrimaryX:)`
@@ -2814,14 +2851,35 @@ extension TransitionCoordinator {
                 windowFrame: NSRect(x: f.minX + 1, y: base.windowFrame.minY, width: rect.width / scale, height: base.windowFrame.height),
                 takenAt: base.takenAt)
             let bgRect = under.map { rect.offsetBy(dx: ((base.windowFrame.minX - $0.windowFrame.minX) * scale).rounded(), dy: 0) }
+            let background = bgRect.flatMap { under?.image.cropping(to: $0) }
+            // The empty bar is only empty where no icon stayed. The icons
+            // move between this strip and the bar the reference was taken
+            // over, so a visible icon can stand in the column a hidden one
+            // was filmed in (#128). Both the keyed column and the mask come
+            // out of that subtraction, so there is nothing downstream to
+            // fall back to: the item keeps its app icon and pictures on a
+            // later pass, which is what an icon that won't cut out does.
+            let ink = background.flatMap { ItemPictures.referenceInk($0) }
+            // `pelmet.debug.picturePass` prints every column's share, not
+            // just the refused ones: the limit is only worth what a real
+            // bar's spread says it is.
+            if dump, let ink { PelmetLog.log("pass: \(key.rawValue) empty-bar ink \(String(format: "%.1f%%", ink * 100))") }
+            if let ink, ink >= BarReference.inkShareLimit {
+                contaminated.append((key, ink))
+                continue
+            }
             guard let picture = ItemPictures.picture(
                 from: column,
                 raw: raw.image.cropping(to: rect),
-                background: bgRect.flatMap { under?.image.cropping(to: $0) })
+                background: background)
             else { continue }
             pictures[key] = picture
             if picture.isHighlighted { PelmetLog.log("pass: \(key.rawValue) on a coloured capsule") }
             if dump { dumpPass([column], name: key.rawValue) }
+        }
+        if !contaminated.isEmpty {
+            let named = contaminated.map { "\($0.0.rawValue) \(String(format: "%.1f%%", $0.1 * 100))" }.joined(separator: ", ")
+            PelmetLog.log("pass: \(contaminated.count) column(s) where the empty bar held an icon, not cut — \(named)")
         }
         return pictures
     }
