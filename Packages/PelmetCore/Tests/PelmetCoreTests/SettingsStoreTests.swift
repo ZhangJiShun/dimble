@@ -141,6 +141,53 @@ struct SettingsStoreTests {
         #expect(back.itemAliases == settings.itemAliases)
     }
 
+    // The panel's right-click choice per app is a new field: an older blob
+    // has none, a bad map costs only itself, an unknown value only its entry.
+    @Test func panelRightClickDefaultsAndRoundTrips() throws {
+        let legacy = try JSONDecoder().decode(SettingsStore.self, from: Data("{}".utf8))
+        #expect(legacy.panelRightClick.isEmpty)
+        let bad = try JSONDecoder().decode(
+            SettingsStore.self, from: Data(#"{"panelRightClick":"nope","autoRehide":false}"#.utf8))
+        #expect(bad.panelRightClick.isEmpty && bad.autoRehide == false)
+        let mixed = try JSONDecoder().decode(
+            SettingsStore.self,
+            from: Data(#"{"panelRightClick":{"bundle:a":"leftClick","bundle:b":"future","bundle:c":"dimbleMenu"}}"#.utf8))
+        #expect(mixed.panelRightClick == ["bundle:a": .leftClick, "bundle:c": .dimbleMenu])
+        var settings = SettingsStore()
+        settings.panelRightClick["bundle:x"] = .leftClick
+        let back = try JSONDecoder().decode(SettingsStore.self, from: JSONEncoder().encode(settings))
+        #expect(back.panelRightClick == settings.panelRightClick)
+    }
+
+    // One app, three IDs over time (Mole, 2026-11-17): Dimble's launcher
+    // while it is quit, its `bundle:` and `status:` IDs while it runs. The
+    // choice set on any of them holds for all.
+    @Test func panelRightClickFollowsTheAppAcrossItsIDs() {
+        var settings = SettingsStore()
+        let launcherSpec = ExtraItemSpec(kind: .appLauncher, bundleID: "com.tw93.MoleApp")
+        settings.extraItems = [launcherSpec]
+        let launcher = ItemID.status(bundle: "app.fif7y.Pelmet", title: launcherSpec.itemTitle)
+        let bundle = ItemID.bundleKey("com.tw93.MoleApp")
+        let status = ItemID.status(bundle: "com.tw93.MoleApp", title: "Mole")
+
+        settings.setPanelRightClick(.leftClick, for: launcher)
+        #expect(settings.panelRightClick == ["com.tw93.MoleApp": .leftClick])
+        for id in [launcher, bundle, status] {
+            #expect(settings.panelRightClickChoice(for: id) == .leftClick)
+        }
+        #expect(settings.panelRightClickChoice(for: .bundleKey("com.other")) == .appMenu)
+
+        settings.setPanelRightClick(.appMenu, for: bundle)
+        #expect(settings.panelRightClick.isEmpty)
+
+        // The first build keyed by sectionKey: still read, and replaced on the next pick.
+        settings.panelRightClick[launcher.sectionKey.rawValue] = .dimbleMenu
+        #expect(settings.panelRightClickChoice(for: launcher) == .dimbleMenu)
+        #expect(settings.panelRightClickChoice(for: bundle) == .dimbleMenu)
+        settings.setPanelRightClick(.leftClick, for: status)
+        #expect(settings.panelRightClick == ["com.tw93.MoleApp": .leftClick])
+    }
+
     // Where hidden icons show up is a new field: an older blob has none and
     // keeps the menu bar. A target this build doesn't know reads as the menu
     // bar too, and the rest of the blob survives it.

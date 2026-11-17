@@ -145,6 +145,12 @@ struct PanelView: View {
     /// The cog's action, when `content.showsSettingsButton` draws one.
     var onSettings: () -> Void = {}
     var tileMenu: (PanelTile) -> [PanelMenuRow] = { _ in [] }
+    /// A plain right-click on an item tile opens the app's own menu; ⌥ right-click
+    /// still gets `tileMenu` (Dimble's: moves, shortcut, quit). Nil: the preview.
+    var onItemSecondary: ((PanelTile) -> Void)?
+    /// Asked when the right-click lands: false lets it through to `tileMenu`
+    /// (the app is set to "Show Dimble Menu").
+    var interceptsSecondary: (PanelTile) -> Bool = { _ in true }
     var panelMenu: () -> [PanelMenuRow] = { [] }
     /// The left edge sets the columns: dragged (the pointer's x in the
     /// window, true when let go), and double-clicked for Auto.
@@ -541,6 +547,13 @@ struct PanelView: View {
                     .focusEffectDisabled()
                     .help(art.dimmed ? "\(art.name)\n\(String(localized: "Not running"))" : art.name)
                     .contextMenu { PanelMenuItems(rows: { tileMenu(placement.tile) }) }
+                    .overlay {
+                        if case .item = placement.tile, let onItemSecondary {
+                            PlainRightClickCatcher(intercepts: { interceptsSecondary(placement.tile) }) {
+                                onItemSecondary(placement.tile)
+                            }
+                        }
+                    }
                     // A tile that can't be dragged keeps every other gesture
                     // (`.subviews`: `.none` took the button's press too).
                     // A click that never travels 4pt stays the button's.
@@ -624,6 +637,38 @@ struct PanelView: View {
 /// A right-click menu's rows, asked for when the menu is drawn, not on every
 /// draw of the panel: a tile's rows look up its app, and every tile has a
 /// menu.
+/// Claims a right-click without ⌥ and nothing else: every other event
+/// (clicks, drags, hover, ⌥ right-click) goes to the tile underneath.
+private struct PlainRightClickCatcher: NSViewRepresentable {
+    let intercepts: () -> Bool
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> CatcherView {
+        let view = CatcherView()
+        view.intercepts = intercepts
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ view: CatcherView, context: Context) {
+        view.intercepts = intercepts
+        view.action = action
+    }
+
+    final class CatcherView: NSView {
+        var intercepts: () -> Bool = { true }
+        var action: () -> Void = {}
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let event = NSApp.currentEvent, event.type == .rightMouseDown,
+                  !event.modifierFlags.contains(.option), intercepts() else { return nil }
+            return super.hitTest(point)
+        }
+
+        override func rightMouseDown(with event: NSEvent) { action() }
+    }
+}
+
 private struct PanelMenuItems: View {
     let rows: () -> [PanelMenuRow]
 

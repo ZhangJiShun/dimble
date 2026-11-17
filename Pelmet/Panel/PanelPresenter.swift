@@ -242,6 +242,9 @@ final class PanelPresenter: RevealPresenter {
     var holdsReveal: Bool {
         guard isOpen, let window else { return false }
         if awaitsPointer || draggingColumns || tileDrag != nil { return true }
+        // An app's menu opened from a tile is up, often reaching past the
+        // panel: the pointer on it is still on the panel's business.
+        if appState?.pressHoldsMenu == true { return true }
         let pointer = NSEvent.mouseLocation
         var reach = window.frame
         if let screen = window.screen ?? NSScreen.main {
@@ -1002,6 +1005,15 @@ final class PanelPresenter: RevealPresenter {
                 self?.appState?.openSettings(tab: .panel)
             },
             tileMenu: { [weak self] tile in self?.menu(for: tile) ?? [] },
+            onItemSecondary: { [weak self] tile in self?.itemSecondary(tile) },
+            interceptsSecondary: { [weak self] tile in
+                guard let self else { return false }
+                // A launcher whose app has no icon to click (quit, or not up
+                // yet): the plain right-click shows Dimble's menu, never a
+                // launch nobody asked for.
+                if self.launcherIsIdle(tile) { return false }
+                return self.rightClickChoice(of: tile) != .dimbleMenu
+            },
             panelMenu: { [weak self] in
                 self?.panelMenu(shown: self?.lastContent, onPanel: true) { [weak self] in self?.toggleFold() } ?? []
             },
@@ -1989,19 +2001,136 @@ final class PanelPresenter: RevealPresenter {
 
     // MARK: - Right-click
 
+    /// What a plain right-click on this tile does (the app's remembered choice).
+    private func rightClickChoice(of tile: PanelTile) -> PanelRightClick {
+        guard case .item(let key) = tile, let appState else { return .appMenu }
+        return appState.settings.panelRightClickChoice(for: key)
+    }
+
+    /// A plain right-click on an item tile: the app's own menu, or a left
+    /// click for apps whose menu hangs there. The panel is not concealed, it
+    /// stays up behind the menu.
+    private func itemSecondary(_ tile: PanelTile) {
+        guard case .item(let key) = tile else { return }
+        switch rightClickChoice(of: tile) {
+        case .appMenu: openAppMenu(key, button: .secondary)
+        case .leftClick: openAppMenu(key, button: .primary)
+        case .dimbleMenu: break
+        }
+    }
+
+    private func openAppMenu(_ key: ItemID, button: ItemPress.Button) {
+        PelmetLog.log("panel: \(button == .primary ? "left" : "right")-click \(key.rawValue)")
+        // Dimble's own launcher tile: its click opens the app's window, but
+        // the user asked for the app's menu, so the click goes to the app's
+        // own menu bar icon, launched in the background first if it is quit.
+        if let bundle = launcherBundle(of: key) {
+            openLauncherAppMenu(bundle: bundle, launcher: key, button: button)
+            return
+        }
+        // No concealNow: the panel stays up behind the app's menu.
+        appState?.openItemMenu(key, button: button, display: openScreen)
+    }
+
+    /// The app behind one of Dimble's app launchers (`Pelmet.App.<uuid>`).
+    private func launcherBundle(of key: ItemID) -> String? {
+        guard case .status(_, let title) = key.parsed, title.hasPrefix("Pelmet.App."),
+              let appState else { return nil }
+        return appState.settings.extraItems
+            .first { $0.kind == .appLauncher && $0.itemTitle == title }?.bundleID
+    }
+
+    /// One of Dimble's launchers whose app has no menu bar icon to click.
+    private func launcherIsIdle(_ tile: PanelTile) -> Bool {
+        guard case .item(let key) = tile, let bundle = launcherBundle(of: key) else { return false }
+        let running = !NSRunningApplication.runningApplications(withBundleIdentifier: bundle).isEmpty
+        return !(running && hasBarItem(of: bundle))
+    }
+
+    /// Whether the engine has seen a menu bar icon of `bundle` (out or concealed).
+    private func hasBarItem(of bundle: String) -> Bool {
+        guard let snapshot = appState?.snapshot else { return false }
+        return snapshot.items.contains { $0.id.bundleID == bundle }
+            || snapshot.concealed.contains { $0.bundleID == bundle }
+    }
+
+    /// The one launch-and-wait in flight: a second ask for the same app is a
+    /// repeat click, another app's replaces it.
+    private var launcherWait: (bundle: String, task: Task<Void, Never>)?
+
+    private func openLauncherAppMenu(bundle: String, launcher: ItemID, button: ItemPress.Button) {
+        if launcherWait?.bundle == bundle {
+            PelmetLog.log("panel: launcher \(bundle) — already waiting for its icon, ignored")
+            return
+        }
+        let target = ItemID.bundleKey(bundle)
+        let display = openScreen
+        let running = !NSRunningApplication.runningApplications(withBundleIdentifier: bundle).isEmpty
+        if running, hasBarItem(of: bundle) {
+            PelmetLog.log("panel: launcher \(launcher.rawValue) → \(target.rawValue), running")
+            appState?.openItemMenu(target, button: button, display: display)
+            return
+        }
+        if !running {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else {
+                PelmetLog.log("panel: launcher \(launcher.rawValue) — \(bundle) not found, its own action instead")
+                appState?.openItemMenu(launcher, button: button, display: display)
+                return
+            }
+            // In the background: no window, no activation, just its menu bar icon.
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            configuration.addsToRecentItems = false
+            // Some apps (Mole) open their main window at launch even in the
+            // background; launched hidden, that window never shows.
+            configuration.hides = true
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
+                if let error { PelmetLog.log("panel: launcher \(bundle) launch failed — \(error.localizedDescription)") }
+            }
+            PelmetLog.log("panel: launcher \(launcher.rawValue) — \(bundle) quit, launched in the background")
+        }
+        let started = Date()
+        let name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
+            .map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundle
+        showTip(String(format: String(localized: "Opening %@’s menu…"), name), for: nil)
+        launcherWait?.task.cancel()
+        let task = Task { @MainActor [weak self] in
+            defer { if self?.launcherWait?.bundle == bundle { self?.launcherWait = nil } }
+            while !Task.isCancelled, Date().timeIntervalSince(started) < 10 {
+                let launched = NSRunningApplication.runningApplications(withBundleIdentifier: bundle)
+                    .contains { $0.isFinishedLaunching }
+                if launched, self?.hasBarItem(of: bundle) == true {
+                    // Let the app settle and the engine adopt the new icon:
+                    // pressed the moment it showed, Mole showed nothing.
+                    try? await Task.sleep(for: .milliseconds(running ? 400 : 1200))
+                    guard !Task.isCancelled else { return }
+                    PelmetLog.log("panel: launcher \(bundle) icon up after \(Int(-started.timeIntervalSinceNow * 1000))ms — clicking it")
+                    self?.showTip(String(format: String(localized: "Opening %@’s menu…"), name), for: 1.5)
+                    self?.appState?.openItemMenu(target, button: button, display: display)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard !Task.isCancelled else { return }
+            PelmetLog.log("panel: launcher \(bundle) — no menu bar icon within 10 s, nothing clicked")
+            self?.showTip(String(format: String(localized: "%@ has no menu bar icon"), name), for: 3)
+        }
+        launcherWait = (bundle, task)
+    }
+
     /// The mock's tile menu: the presses, the moves between sections, the
     /// app. The command bar's ⌘K list has the same rows.
     func menu(for tile: PanelTile) -> [PanelMenuRow] {
         guard let appState else { return [] }
         switch tile {
         case .item(let key):
+            // A launcher with nothing to click yet: open the app, or launch it
+            // and show its menu once its icon is up — both asked for here.
+            let idle = launcherIsIdle(tile)
             var rows: [PanelMenuRow] = [
-                .action(ItemMenuActions.openMenuTitle) { [weak self] in self?.press(tile) },
-                .action(String(localized: "Open Right-Click Menu")) { [weak self, weak appState] in
-                    PelmetLog.log("panel: right-click \(key.rawValue)")
-                    let display = self?.openScreen
-                    appState?.concealNow()
-                    appState?.openItemMenu(key, button: .secondary, display: display)
+                .action(idle ? String(localized: "Open App") : ItemMenuActions.openMenuTitle) { [weak self] in self?.press(tile) },
+                .action(idle ? String(localized: "Launch and Show Its Menu") : String(localized: "Open Right-Click Menu")) { [weak self] in
+                    self?.openAppMenu(key, button: .secondary)
                 },
                 .action(ItemMenuActions.showInBarTitle) { [weak appState] in
                     guard let appState else { return }
@@ -2018,6 +2147,19 @@ final class PanelPresenter: RevealPresenter {
                         appState?.moveItemNow(key, to: section)
                     })
                 }
+            }
+            rows.append(.divider)
+            rows.append(.header(String(localized: "On Right-Click")))
+            let choice = appState.settings.panelRightClickChoice(for: key)
+            for (option, title) in [(PanelRightClick.appMenu, String(localized: "Show App Menu")),
+                                    (.leftClick, String(localized: "Click as Left Button")),
+                                    (.dimbleMenu, String(localized: "Show Dimble Menu"))] {
+                rows.append(.check(title, choice == option) { [weak appState] in
+                    guard let appState else { return }
+                    appState.settings.setPanelRightClick(option, for: key)
+                    appState.settings.save()
+                    PelmetLog.log("panel: right-click of \(key.rawValue) (app \(appState.settings.panelRightClickKey(for: key))) is \(option.rawValue)")
+                })
             }
             rows.append(.divider)
             rows.append(.action(ItemMenuActions.shortcutTitle(key, appState: appState)) { [weak appState] in

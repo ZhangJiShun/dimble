@@ -53,6 +53,11 @@ final class ItemPress {
     private final class Run {
         private(set) var yieldedAt: Date?
         var task: Task<Void, Never>?
+        /// The press this relay is for, so a repeat of it can be told apart.
+        var key: ItemID?
+        var button: Button?
+        /// Past the click: the item's menu is up or the relay is putting it back.
+        var settled = false
         var yielded: Bool { yieldedAt != nil }
 
         func yield() {
@@ -125,6 +130,10 @@ final class ItemPress {
     private var current: Run?
     /// A relay is on the bar (locating, revealing, clicking, putting back).
     var isRunning: Bool { current != nil }
+    /// A menu or popover a press opened is up: the panel and the reveal hold
+    /// until it is gone. Closing them under it took the menu with them, about
+    /// 0.5 s after the panel closed, for every app (2026-11-17).
+    private(set) var holdsMenu = false
     /// A relay holds the « open for an icon behind it: the icons it exposed
     /// hit-test as empty bar, and a click on one is never an empty-bar click.
     private(set) static var holdsOverflowOpen = false
@@ -144,11 +153,21 @@ final class ItemPress {
     func open(_ id: ItemID, button: Button, display: CGDirectDisplayID? = nil) {
         let requested = Date()
         let previous = current
+        // The same press again while the first is still on its way to the
+        // click: a repeat of an impatient click, not a new request. Yielding
+        // to it stacked relays that clicked nothing (2026-11-17).
+        if let previous, !previous.yielded, !previous.settled,
+           previous.key == id.sectionKey, previous.button == button {
+            PelmetLog.log("press: \(id.sectionKey.rawValue) — already in flight, ignored")
+            return
+        }
         if let previous {
             PelmetLog.log("press: \(id.sectionKey.rawValue) — the running relay yields")
             previous.yield()
         }
         let run = Run()
+        run.key = id.sectionKey
+        run.button = button
         current = run
         let after = previous?.task
         run.task = Task { @MainActor [weak self] in
@@ -338,9 +357,14 @@ final class ItemPress {
             // until the menu is gone.
             let hold: () -> Void = { [cover] in cover?.keepUp(for: AppTiming.pressCoverHoldStep) }
             let sign = await waitForSign(over: before, pid: target.pid, geometry: geometry, frontCounts: !wasFront, run: run, hold: hold)
+            run.settled = true
             PelmetLog.log("press: \(key.rawValue) \(sign.map { "showed \($0.rawValue)" } ?? "showed nothing") at \(ms())ms")
             // An item that was never put away has nothing to wait for.
             if let sign, revealed || toggle != nil || unheld {
+                // Only a menu or popover holds the panel: an app's own window
+                // stays for minutes and is no reason to keep it up.
+                holdsMenu = sign == .window
+                defer { holdsMenu = false }
                 atRest = await waitUntilGone(key, sign: sign, pid: target.pid, before: before, geometry: geometry, run: run, hold: hold, elapsed: ms)
             } else {
                 atRest = sign == nil

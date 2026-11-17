@@ -64,6 +64,18 @@ public enum DisplayBehavior: String, Codable, Equatable, Sendable {
     case collapse
 }
 
+/// What a plain right-click on an app's tile in the panel does. Remembered
+/// per app (`SettingsStore.panelRightClick`); absent = `.appMenu`.
+public enum PanelRightClick: String, Codable, CaseIterable, Sendable {
+    /// The app's own menu bar menu, as a right-click on its icon.
+    case appMenu
+    /// A left-click on its icon instead: for apps whose menu hangs on the
+    /// left button and whose right-click opens a window.
+    case leftClick
+    /// Dimble's own tile menu.
+    case dimbleMenu
+}
+
 public enum HoverRevealScope: String, Codable, CaseIterable, Sendable {
     case menuBarArea
     case iconOnly
@@ -438,6 +450,58 @@ public struct SettingsStore: Codable, Equatable, Sendable {
     /// The user's own name for an item, keyed by `sectionKey`. The command
     /// bar's search matches it above everything else the item carries.
     public var itemAliases: [String: String] = [:]
+    /// What a plain right-click on an item's panel tile does, keyed by the
+    /// app's bundle ID (`panelRightClickKey`). Absent = the app's own menu.
+    public var panelRightClick: [String: PanelRightClick] = [:]
+
+    /// The key `panelRightClick` stores an item's choice under: its app's
+    /// bundle ID. One tile can carry different IDs over time — an app
+    /// launcher of Dimble's (`status:<Dimble>::Pelmet.App.<uuid>`) while the
+    /// app is quit, the app's own `bundle:`/`status:` ID once it runs — and
+    /// the choice has to follow the app, not the ID of the moment.
+    public func panelRightClickKey(for id: ItemID) -> String {
+        switch id.parsed {
+        case .bundleKey(let bundle):
+            return bundle
+        case .status(let bundle, let title):
+            if title.hasPrefix("Pelmet.App.") {
+                return extraItems.first { $0.kind == .appLauncher && $0.itemTitle == title }?.bundleID
+                    ?? id.sectionKey.rawValue
+            }
+            return bundle
+        case .module, .opaque:
+            return id.sectionKey.rawValue
+        }
+    }
+
+    /// The app a stored key stands for: a bundle ID as is, an item ID (how
+    /// 2026-11-17's first build keyed it, by `sectionKey`) through
+    /// `panelRightClickKey`.
+    private func panelRightClickApp(ofStoredKey key: String) -> String {
+        key.hasPrefix("status:") || key.hasPrefix("bundle:") || key.hasPrefix("module:")
+            ? panelRightClickKey(for: ItemID(rawValue: key)) : key
+    }
+
+    /// The remembered choice for an item's app, whichever ID it was set on.
+    public func panelRightClickChoice(for id: ItemID) -> PanelRightClick {
+        let app = panelRightClickKey(for: id)
+        if let direct = panelRightClick[app] { return direct }
+        return panelRightClick.first { panelRightClickApp(ofStoredKey: $0.key) == app }?.value ?? .appMenu
+    }
+
+    /// Remember `choice` for the item's app (`.appMenu` clears it), dropping
+    /// any older entry for the same app.
+    public mutating func setPanelRightClick(_ choice: PanelRightClick, for id: ItemID) {
+        let key = panelRightClickKey(for: id)
+        for stored in panelRightClick.keys where panelRightClickApp(ofStoredKey: stored) == key {
+            panelRightClick.removeValue(forKey: stored)
+        }
+        if choice == .appMenu {
+            panelRightClick.removeValue(forKey: key)
+        } else {
+            panelRightClick[key] = choice
+        }
+    }
 
     public var revealTriggers = RevealTriggers()
     public var autoRehide: Bool = true
@@ -604,7 +668,7 @@ public struct SettingsStore: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case onboardingCompleted, launchAtLogin, showStatusItem, hotkey, settingsHotkey, alwaysHiddenHotkey, searchHotkey
-        case itemHotkeys, itemAliases
+        case itemHotkeys, itemAliases, panelRightClick
         case revealTriggers, autoRehide, rehideDelay, rehideOnClickElsewhere, revealAnimation
         case hideSystemExtras, showMediaControls, extraItems, sectionModel, separators
         case displayTemplate, displayOverrides, displayRevealTargets
@@ -631,6 +695,7 @@ public struct SettingsStore: Codable, Equatable, Sendable {
         searchHotkey = c.field(HotkeySpec?.self, .searchHotkey, defaults.searchHotkey) ?? defaults.searchHotkey
         itemHotkeys = c.field([String: HotkeySpec].self, .itemHotkeys, defaults.itemHotkeys)
         itemAliases = c.field([String: String].self, .itemAliases, defaults.itemAliases)
+        panelRightClick = c.eachValue(PanelRightClick.init(rawValue:), .panelRightClick)
         revealTriggers = c.field(RevealTriggers.self, .revealTriggers, defaults.revealTriggers)
         autoRehide = c.field(Bool.self, .autoRehide, defaults.autoRehide)
         rehideDelay = c.field(TimeInterval.self, .rehideDelay, defaults.rehideDelay)
