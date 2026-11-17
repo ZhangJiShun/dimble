@@ -528,22 +528,14 @@ final class ConcealGhostOverlay {
                     PelmetLog.log("ghost: capture leaves out \(foreign.map(\.owner).joined(separator: ", ")) (\(excluded.count) window(s))")
                 }
             }
-            if liveMirror {
-                // A cover that stays up for minutes must not hold a window's
-                // edge or the shadow it casts into the bar's last rows: the
-                // picture is the bar over the wallpaper, no window in it.
-                if content == nil {
-                    content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                }
-                let ordinary = ordinaryAppWindows(content?.windows ?? []).filter { $0.frame.intersects(bounds) }
-                if !ordinary.isEmpty {
-                    excluded += ordinary
-                    PelmetLog.log("livemirror: picture leaves out \(ordinary.count) ordinary window(s) and every shadow")
-                }
-            }
+            // Live mode's cover keeps the windows' shadows: the bar is clear
+            // glass, a window parked under it darkens its last rows, and a
+            // picture of the bar over the bare wallpaper read lighter than
+            // the bar beside it for the cover's whole hold (2026-11-16). The
+            // live mirror takes it again when the windows under the bar
+            // change (`LiveMirror.watchShadows`).
             let filter = SCContentFilter(display: display, excludingWindows: excluded)
             let config = SCStreamConfiguration()
-            if liveMirror { config.ignoreShadowsDisplay = true }
             config.sourceRect = capture
             // The display's own scale — a hardcoded ×2 half-sized the strip
             // on 1× externals.
@@ -1109,6 +1101,39 @@ final class ConcealGhostOverlay {
             syncTwin()
             scheduleTwinShape()
         }
+    }
+
+    /// Lengthens the cover from the right, in place: the same window takes a
+    /// wider crop of the kept picture, so no frame shows a gap (a new window
+    /// for a longer cover left the strip bare until it was up). The left edge
+    /// must stay. False when `wider` does not fit that, the caller builds a
+    /// new cover.
+    @discardableResult
+    func grow(to wider: BarSnapshot) -> Bool {
+        guard !finished else { return false }
+        let target = wider.windowFrame
+        let frame = window.frame
+        guard abs(target.minX - frame.minX) < 0.5, target.width > frame.width + 0.5,
+              abs(target.height - frame.height) < 0.5 else { return false }
+        imageView.image = NSImage(cgImage: wider.image, size: target.size)
+        imageView.frame = NSRect(origin: .zero, size: target.size)
+        window.contentView?.frame = NSRect(origin: .zero, size: target.size)
+        window.setFrame(target, display: true)
+        catcher?.setFrame(target, display: false)
+        if let twin {
+            twin.setFrame(target, display: false)
+            if let view = twin.contentView?.subviews.first as? NSImageView {
+                view.image = NSImage(cgImage: wider.image, size: target.size)
+                view.frame = NSRect(origin: .zero, size: target.size)
+            }
+            twin.contentView?.frame = NSRect(origin: .zero, size: target.size)
+            twinPicture = wider.image
+            // The icons moved with the « : the twin's cut is stale.
+            twinCovers = false
+            syncTwin()
+            scheduleTwinShape()
+        }
+        return true
     }
 
     /// Directly below another cover: the one above stays what is seen while

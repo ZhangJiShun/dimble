@@ -610,6 +610,14 @@ final class LiveMirror {
         /// When the picture was taken, and under which backdrop.
         var pictureAt = Date()
         var pictureGeneration = 0
+        /// The windows whose shadows fell into the strip when the picture
+        /// was taken (`shadowCasters`), and what the watch saw last and since
+        /// when: the bar is clear glass, a window parked under it darkens its
+        /// last rows, and a picture with the old shadows read lighter or
+        /// darker than the bar beside it.
+        var casters: [String] = []
+        var castersSeen: [String] = []
+        var castersSeenAt = Date()
         /// The last still of any kind: the slow graphic refresh counts from it.
         var lastSnapshotAt = Date()
         /// Whether this display held the focused window when that still was
@@ -744,7 +752,7 @@ final class LiveMirror {
     }
     private struct Memory { var chevronMinX: CGFloat; var pills: [Remembered] }
     private var remembered: [CGDirectDisplayID: Memory] = [:]
-    private struct KeptPicture { var picture: ConcealGhostOverlay.BarSnapshot; var generation: Int; var at: Date }
+    private struct KeptPicture { var picture: ConcealGhostOverlay.BarSnapshot; var generation: Int; var at: Date; var casters: [String] }
     private var keptPictures: [CGDirectDisplayID: KeptPicture] = [:]
     /// A kept picture of the bare bar serves a return this long (the
     /// backdrop's changes it can know of are counted by `backdropGeneration`).
@@ -1045,7 +1053,7 @@ final class LiveMirror {
         keptPictures = [:]
         for side in sides {
             if let picture = side.picture, side.pictureGeneration == backdropGeneration {
-                keptPictures[side.id] = KeptPicture(picture: picture, generation: side.pictureGeneration, at: side.pictureAt)
+                keptPictures[side.id] = KeptPicture(picture: picture, generation: side.pictureGeneration, at: side.pictureAt, casters: side.casters)
             }
             guard let chevron = lastChevron else { continue }
             let pills = side.mirrors.filter { !$0.dropped && $0.visual != nil && $0.base.contents != nil }.map { m -> Remembered in
@@ -1233,6 +1241,7 @@ final class LiveMirror {
             ) { [weak self] _ in Task { @MainActor in await self?.menusMayHaveChanged() } }
         }
         startOrderKeeper()
+        startChevronWatch()
         loop = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -1274,6 +1283,7 @@ final class LiveMirror {
     private func stopLoop() {
         PelmetLog.log("livemirror: idle — loop, order keeper and observers stopped")
         loop?.cancel(); loop = nil
+        stopChevronWatch()
         orderKeeper?.cancel(); orderKeeper = nil
         ConcealGhostOverlay.onNewCover = nil
         if let o = screenObserver { NotificationCenter.default.removeObserver(o); screenObserver = nil }
@@ -1816,11 +1826,15 @@ final class LiveMirror {
             // A kept picture holds no icon out on their own (they are cut
             // out of it): one is taken again while some are out.
             if !retake, let keep = keptPictures[side.id], keep.generation == backdropGeneration,
-               Date().timeIntervalSince(keep.at) < Self.pictureMaxAge, await appState.engine.itemsShownAlone().isEmpty,
+               Date().timeIntervalSince(keep.at) < Self.pictureMaxAge,
+               keep.casters == Self.shadowCasters(on: side, strip: keep.picture.windowFrame),
+               await appState.engine.itemsShownAlone().isEmpty,
                !ConcealGhostOverlay.cropped([keep.picture], toPrimaryX: span).isEmpty {
                 side.picture = keep.picture
                 side.pictureAt = keep.at
                 side.pictureGeneration = keep.generation
+                side.casters = keep.casters
+                side.castersSeen = keep.casters
                 PelmetLog.log("livemirror: display \(side.id) picture kept from \(Int(Date().timeIntervalSince(keep.at)))s ago — no capture")
                 continue
             }
@@ -1842,6 +1856,8 @@ final class LiveMirror {
             guard let picture = side.picture else { await abort("no picture of display \(side.id)", holdOff: true); return }
             side.pictureAt = Date()
             side.pictureGeneration = backdropGeneration
+            side.casters = Self.shadowCasters(on: side, strip: picture.windowFrame)
+            side.castersSeen = side.casters
             captured = true
             fresh.insert(side.id)
             PelmetLog.log("livemirror: display \(side.id) picture \(Int(picture.windowFrame.minX))..\(Int(picture.windowFrame.maxX)) (wanted \(Int(left))..\(Int(right)))")
@@ -2062,6 +2078,22 @@ final class LiveMirror {
             layoutMirrors(side)
             if why != "enter" { PelmetLog.log("livemirror: cover #\(current.id) on display \(side.id) \(Int(side.coverMinX))..\(Int(side.coverMaxX)) (\(why), ended in place)") }
             return true
+        }
+        // A longer cover with the same left edge: the kept picture re-cropped
+        // wider into the SAME window (the « moved right). A new window left the
+        // strip between the old end and the new « bare for the frames the
+        // swap took.
+        if why == "settled" || why == "chevron moved", let current = side.cover?.members.first, abs(left - side.coverMinX) < 0.5,
+           right > side.coverMaxX + 0.5 {
+            let growShift = side.screen.frame.maxX - primaryMaxX
+            if let span = coverSpan(left: left, right: right, shift: growShift),
+               let wider = ConcealGhostOverlay.cropped([picture], toPrimaryX: span).first,
+               current.grow(to: wider) {
+                side.coverMaxX = current.windowFrame.maxX
+                layoutMirrors(side)
+                PelmetLog.log("livemirror: cover #\(current.id) on display \(side.id) \(Int(side.coverMinX))..\(Int(side.coverMaxX)) (\(why), grown in place)")
+                return true
+            }
         }
         let shift = side.screen.frame.maxX - primaryMaxX
         guard let span = coverSpan(left: left, right: right, shift: shift) else {
@@ -3419,31 +3451,129 @@ final class LiveMirror {
     }
     private var pressPassesClicks = false
 
+    // MARK: Chevron follow
+
+    private var followingChevron = false
+    private var chevronWatch: Task<Void, Never>?
+
+    /// A quick look at the « 's window (a property read) every 30 ms. The
+    /// tick polls every 250 ms and waits on AX reads, and a « that moved right
+    /// left the strip between the old cover's end and the new « bare until
+    /// the cover was rebuilt: the last hidden icon showed beside the pill.
+    private func startChevronWatch() {
+        chevronWatch?.cancel()
+        chevronWatch = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(30))
+                guard !Task.isCancelled, let self else { return }
+                guard self.isActive, !self.entering, !self.exiting, !self.handingOver else { continue }
+                await self.followChevron(from: "watch")
+            }
+        }
+    }
+
+    private func stopChevronWatch() {
+        chevronWatch?.cancel(); chevronWatch = nil
+    }
+
+    /// The cover's end follows the « when it moved. One run at a time: the
+    /// watch and the tick both call it.
+    private func followChevron(from source: String) async {
+        guard let appState, !followingChevron else { return }
+        guard let chevron = appState.chevronWindowFrame, let last = lastChevron,
+              abs(chevron.minX - last.minX) > 0.5 || abs(chevron.minY - last.minY) > 0.5 else { return }
+        followingChevron = true
+        defer { followingChevron = false }
+        let movedAt = ProcessInfo.processInfo.systemUptime
+        PelmetLog.log("livemirror: re-measure — chevron \(Int(last.minX)) → \(Int(chevron.minX)) (\(source))")
+        lastChevron = chevron
+        var short = false
+        for side in sides {
+            if side.showsAll || isOut(side) { await measureRunEdge(side) }
+            // A picture that ends short of the « (an extra right of it,
+            // Dimble's ▶, went away since it was taken) can't reach it:
+            // the hidden icons showed in between until the activity
+            // ended. The pictures are taken again.
+            if !buildCover(side, left: side.coverMinX, right: coverEnd(chevron, on: side) - 1, why: "chevron moved"), !side.showsAll {
+                short = true
+            }
+            if side.showsAll { noteRun(side) }
+        }
+        PelmetLog.log("livemirror: cover followed the « in \(Int((ProcessInfo.processInfo.systemUptime - movedAt) * 1000)) ms (\(source))")
+        if short { Task { @MainActor [weak self] in await self?.backdropMayHaveChanged("the « moved past the picture") } }
+    }
+
+    // MARK: Shadows under the bar
+
+    /// How far below the bar a window's shadow still reaches into it.
+    private static let shadowReach: CGFloat = 60
+    private var lastShadowRetake = Date.distantPast
+
+    /// The ordinary windows that can cast a shadow into `strip` (Cocoa
+    /// global, the picture's frame) on `side`, front to back: their frames on
+    /// whole points, `*` on the frontmost app's front window (a focused
+    /// window casts the larger shadow). What a picture holds of the bar's
+    /// last rows follows from this list.
+    private static func shadowCasters(on side: Side, strip: NSRect, in given: [[String: Any]]? = nil) -> [String] {
+        guard let list = given ?? (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]])
+        else { return [] }
+        let me = ProcessInfo.processInfo.processIdentifier
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let bounds = side.bounds
+        let barBottom = bounds.minY + strip.height
+        let left = strip.minX - shadowReach, right = strip.maxX + shadowReach
+        var frontSeen = false
+        var out: [String] = []
+        for window in list {
+            guard let layer = window[kCGWindowLayer as String] as? Int, layer >= 0, layer < 20,
+                  let pid = window[kCGWindowOwnerPID as String] as? pid_t, pid != me,
+                  let b = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = b["X"], let y = b["Y"], let width = b["Width"], let height = b["Height"]
+            else { continue }
+            let isFront = layer == 0 && pid == front && !frontSeen
+            if isFront { frontSeen = true }
+            guard (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
+                  y < barBottom + shadowReach, y + height > bounds.minY,
+                  x < right, x + width > left
+            else { continue }
+            out.append("\(Int(x.rounded())),\(Int(y.rounded())),\(Int(width.rounded())),\(Int(height.rounded()))\(isFront ? "*" : "")")
+        }
+        return out
+    }
+
+    /// The pictures hold the shadows the windows under the bar cast when
+    /// they were taken. A window that moved, came, went or took or lost the
+    /// focus there changes the live bar's last rows: once the change has
+    /// held a second, the pictures are taken again (`retake`), no more than
+    /// once every 5 s.
+    private func watchShadows() {
+        guard isActive, !entering, !exiting, !handingOver, !coverLifted, hiddenOut == nil else { return }
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        let now = Date()
+        var changed: [CGDirectDisplayID] = []
+        for side in sides {
+            guard let picture = side.picture else { continue }
+            let seen = Self.shadowCasters(on: side, strip: picture.windowFrame, in: list)
+            if seen != side.castersSeen { side.castersSeen = seen; side.castersSeenAt = now }
+            if seen != side.casters, now.timeIntervalSince(side.castersSeenAt) >= 1 { changed.append(side.id) }
+        }
+        guard !changed.isEmpty, now.timeIntervalSince(lastShadowRetake) >= 5 else { return }
+        lastShadowRetake = now
+        backdropGeneration += 1
+        let displays = changed.map(String.init).joined(separator: ", ")
+        Task { @MainActor [weak self] in await self?.backdropMayHaveChanged("the windows under the bar changed (display \(displays))") }
+    }
+
     // MARK: Tick
 
     private func tick() async {
         guard let appState else { return }
         tickCount += 1
         // The « moved (extras came or went, the capture indicator lit or
-        // went out): the cover's end follows it.
-        if let chevron = appState.chevronWindowFrame, let last = lastChevron,
-           abs(chevron.minX - last.minX) > 0.5 || abs(chevron.minY - last.minY) > 0.5 {
-            PelmetLog.log("livemirror: re-measure — chevron \(Int(last.minX)) → \(Int(chevron.minX))")
-            lastChevron = chevron
-            var short = false
-            for side in sides {
-                if side.showsAll || isOut(side) { await measureRunEdge(side) }
-                // A picture that ends short of the « (an extra right of it,
-                // Dimble's ▶, went away since it was taken) can't reach it:
-                // the hidden icons showed in between until the activity
-                // ended. The pictures are taken again.
-                if !buildCover(side, left: side.coverMinX, right: coverEnd(chevron, on: side) - 1, why: "chevron moved"), !side.showsAll {
-                    short = true
-                }
-                if side.showsAll { noteRun(side) }
-            }
-            if short { Task { @MainActor [weak self] in await self?.backdropMayHaveChanged("the « moved past the picture") } }
-        }
+        // went out): the cover's end follows it. The quick watch (`chevronWatch`)
+        // usually got there first; this is the net behind it.
+        await followChevron(from: "tick")
+        if tickCount % 2 == 0 { watchShadows() }
         for side in sides {
             // The pills are looked for every 2 s (an activity starting or ending),
             // read every 2 s too; while a text moves (a countdown) or a look
