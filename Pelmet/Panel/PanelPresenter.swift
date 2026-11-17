@@ -244,7 +244,7 @@ final class PanelPresenter: RevealPresenter {
         if awaitsPointer || draggingColumns || tileDrag != nil { return true }
         // An app's menu opened from a tile is up, often reaching past the
         // panel: the pointer on it is still on the panel's business.
-        if appState?.pressHoldsMenu == true { return true }
+        if appState?.pressHoldsMenu == true || mirrorMenuOpen { return true }
         let pointer = NSEvent.mouseLocation
         var reach = window.frame
         if let screen = window.screen ?? NSScreen.main {
@@ -2013,7 +2013,11 @@ final class PanelPresenter: RevealPresenter {
     private func itemSecondary(_ tile: PanelTile) {
         guard case .item(let key) = tile else { return }
         switch rightClickChoice(of: tile) {
-        case .appMenu: openAppMenu(key, button: .secondary)
+        case .appMenu:
+            // The app's menu copied beside the tile when it has one attached;
+            // else its real icon clicked, the menu opening under it on the bar.
+            if showMirroredMenu(key) { return }
+            openAppMenu(key, button: .secondary)
         case .leftClick: openAppMenu(key, button: .primary)
         case .dimbleMenu: break
         }
@@ -2030,6 +2034,26 @@ final class PanelPresenter: RevealPresenter {
         }
         // No concealNow: the panel stays up behind the app's menu.
         appState?.openItemMenu(key, button: button, display: openScreen)
+    }
+
+    /// A copy of the app's menu is up over the panel (`AppMenuMirror`).
+    private var mirrorMenuOpen = false
+
+    /// Pops up the app's menu, copied over AX, at the pointer beside the
+    /// tile. False when it has none to copy. Synchronous: the menu tracks
+    /// until it closes, the panel staying up behind it.
+    private func showMirroredMenu(_ key: ItemID) -> Bool {
+        let bundle = launcherBundle(of: key) ?? key.bundleID
+        guard let bundle, bundle != PelmetBundle.mainID, !key.isSystemModule else { return false }
+        guard let menu = AppMenuMirror.menu(for: key, bundle: bundle, picked: { [weak self] in
+            // A pick is the end of the errand, as on the real menu.
+            self?.appState?.concealNow()
+        }) else { return false }
+        PelmetLog.log("panel: right-click \(key.rawValue) — the app's menu copied beside the tile")
+        mirrorMenuOpen = true
+        defer { mirrorMenuOpen = false }
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        return true
     }
 
     /// The app behind one of Dimble's app launchers (`Pelmet.App.<uuid>`).
