@@ -16,6 +16,7 @@
 // the replay carries its own up.
 
 import AppKit
+import PelmetCore
 import PelmetEngine
 
 // Runs off the main actor: the tap callback fires on the relay thread and
@@ -218,11 +219,46 @@ nonisolated final class ClockClickRelay: @unchecked Sendable {
             return true
         }
         guard decision else { return Unmanaged.passUnretained(event) }
+        // The corner click is the clock's only while the bar is down. A
+        // full-screen app that auto-hides it leaves the corner to the app
+        // underneath, and a bar still sliding in has no clock to press yet;
+        // swallowing either ate the click (AGENTS §7). Asked only here, for
+        // a click the zone has already claimed, so the window list is read
+        // on corner clicks and never on ordinary ones.
+        if type == .leftMouseDown, let why = Self.barNotDown(at: location) {
+            lock.withLock { swallowUpUntil = nil }
+            PelmetLog.log("clock: click at \(Int(location.x)),\(Int(location.y)) passed — \(why)")
+            return Unmanaged.passUnretained(event)
+        }
         if type == .leftMouseDown {
             let target = lock.withLock { clockCenter(near: location) ?? location }
             Task { @MainActor [onClick, option] in onClick(target, location, option) }
         }
         return nil
+    }
+
+    /// Why the bar under `point` is not fully down (nil when it is, or when
+    /// it cannot be told): WindowServer's "Menubar" window sits above the
+    /// display's top edge while a full-screen app hides the bar, and travels
+    /// down it during the slide-in. Reads the window list including off-screen
+    /// entries, since a hidden bar may leave the on-screen list altogether.
+    private static func barNotDown(at point: CGPoint) -> String? {
+        guard let display = display(under: point),
+              let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        let bars: [MenuBarShown.Window] = list.compactMap { window in
+            guard window[kCGWindowOwnerName as String] as? String == "Window Server",
+                  window[kCGWindowName as String] as? String == "Menubar",
+                  let dict = window[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dict) else { return nil }
+            return MenuBarShown.Window(
+                bounds: bounds,
+                onScreen: window[kCGWindowIsOnscreen as String] as? Bool ?? false,
+                alpha: window[kCGWindowAlpha as String] as? Double ?? 1)
+        }
+        let displayBounds = CGDisplayBounds(display)
+        guard MenuBarShown.isShown(on: displayBounds, windows: bars) == false else { return nil }
+        return "menu bar not down on display \(display) (full-screen auto-hide or sliding in)"
     }
 
     /// Pure geometry under the lock: the display containing the point, then
