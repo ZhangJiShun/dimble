@@ -7,6 +7,20 @@
 
 ---
 
+## 0. 两条最先看的原则
+
+**① 以用户的使用体验为第一原则。** 这是 Jason 自用的 fork。修 bug、加功能、合并上游，都以他的使用体验为准；上游的设计和取舍只是参考，不能作为「不改」「没法改」「建议保持现状」的理由。
+- 他反馈问题时，先给「按他要的效果怎么实现」的方案和代价（哪怕要改上游逻辑、加开关、按应用单独处理），再说限制。
+- 真的做不到，要说清技术上卡在哪，并给出最接近的替代方案。
+- 同步上游时，上游新功能如果影响他现有的使用习惯，默认不合并或默认关闭，并在汇报里点名告诉他。
+
+**② 先确认在哪个目录、哪个分支改，装机前核对版本。** 2026-11-16、11-17 连续两次在旧目录改完装机，把他日常用的版本降级了。
+- 日常版本 = `main` 加上当前的同步分支。动手前先 `git worktree list` 和 `git branch -vv`，找到最新的同步分支所在的目录（2026-11-17 起是 `~/worktrees/Pelmet-sync-0.4.0`，分支 `sync-upstream-0.4.0`），在那里改。
+- 装机前对比待装版本和 `/Applications/Dimble.app` 的 `CFBundleShortVersionString`/`CFBundleVersion`；`dev-install.sh` 遇到装旧版会拦下（`--allow-downgrade` 才放行），**不要为了装上去就加这个参数**，先停下来问。
+- 换了同步分支或工作目录后，更新这里的目录名。
+
+---
+
 ## 1. 项目是什么
 
 macOS 菜单栏图标管理工具（曾用名 Pelmet、Pliss，现名 Dimble）：把菜单栏图标收进「隐藏区」，点箭头或悬停时展开，也能用面板、单行显示。
@@ -38,7 +52,9 @@ swift test --package-path Packages/PelmetCore      # 核心逻辑测试（秒级
 swift test --package-path Packages/PelmetEngine
 scripts/dev-install.sh                              # 编译、签名、备份旧版、替换 /Applications/Dimble.app、重启
 scripts/dev-install.sh --build-only                 # 只编译签名，不动已安装的版本（试跑用）
-scripts/dev-install.sh --rollback                   # 换回上一个版本
+scripts/dev-install.sh --list-backups               # 列出所有备份（版本、build、时间）
+scripts/dev-install.sh --rollback [版本号|路径]     # 换回备份；不带参数取最新一份，如 --rollback 0.4.0
+# 装的版本比已装的旧会被拦下，--allow-downgrade 才放行（见 §0 ②）
 ```
 
 - **工程文件 `Pelmet.xcodeproj` 由 `project.yml` 生成、不进 git。** 合并上游或新增源文件后必须重新生成（`xcodegen generate`），否则编译报「找不到某个类型」。`dev-install.sh` 会自动执行。
@@ -52,7 +68,7 @@ scripts/dev-install.sh --rollback                   # 换回上一个版本
 
 ## 3. 本地改动（相对上游）与同步上游的底线
 
-**用户的底线：同步上游时，不能改动本地已经定好的 UI 样式。** 同步时这些必须原样保留：
+**用户的底线：同步上游时，不能改动本地已经定好的 UI 样式和使用习惯（见 §0 ①）。** 同步时这些必须原样保留：
 
 1. **面板样式三选一**（设置 › 面板 › 样式）：图块（原样）、紧凑（格子 38pt、图标 27pt）、列表（图标加名称并排，默认 2 列，无常驻底）。数据在 `PanelOptions.style`，尺寸在 `PanelMetrics.tight/.list`，绘制在 `PanelView` 的 `PanelTileLabel` 与 `Well`，右键菜单也有对应项。每种样式单独记自己的列数。单行（row）沿用上游已有的布局。
 2. **面板在图标正下方水平居中**，放不下时被屏幕边缘推进来（`PanelHorizontalPlacement`，`PanelPresenter.place`）。居中时拖左边缘调列数按中线算宽度，被边缘推着时按右边缘算。设置页预览同步居中。
@@ -61,6 +77,7 @@ scripts/dev-install.sh --rollback                   # 换回上一个版本
 5. 一批稳定性修复（计时器上限、辅助进程重启、引导窗口缓存、AX 超时、快捷键冲突重试、开机启动开关、退出前保存设置、事件监听失效重建、`release.sh` 的两个坑）。
 6. **关闭自动更新**：`project.yml` 里 `SUFeedURL`、`SUPublicEDKey` 留空、`SUEnableAutomaticChecks: false`，否则上游的更新源会用上游原版覆盖本地版本（丢样式、丢授权）。同步上游时这几行冲突一律保留本地。副作用：这个 fork 不能直接用 `release.sh` 发版（签名校验要公钥）。
    取而代之的是**只提醒不安装**（`Pelmet/Update/UpstreamWatch.swift`，解析在 `PelmetCore/UpstreamFeed.swift`）：启动 1 分钟后及每天读一次上游 appcast，只看正式版（跳过 beta），比本机 `CFBundleVersion` 新就点亮菜单栏小圆点；关于页显示「上游已发布 x.y.z」，按钮只打开上游发布页，打开关于页后小圆点熄灭。接入点：`AppState.refreshUpdateDot`/`wantsUpdateDot`、`PelmetStatusItem` 初始化、`SettingsView` 关于页 `UpstreamRow()`。同步上游时保留。
+7. **面板图块右键**（2026-11-17）：普通右键直接弹该应用自己的菜单，面板不收起；⌥ 右键弹 Dimble 菜单。每个应用可在 Dimble 菜单「右键时」里改成「改为左键点击」（Mole 这类）或「弹出 Dimble 菜单」，按应用（bundle ID）存在 `SettingsStore.panelRightClick`。应用菜单开着时面板和隐藏区都不收（`ItemPress.holdsMenu`），同一图标处理中的重复点击被忽略。Dimble 启动器的应用没运行时，普通右键不自动启动应用，弹 Dimble 菜单，前两项是「打开应用」「启动并显示它的菜单」（`launcherIsIdle`、`openLauncherAppMenu`）。右键是通用组件，改它要按所有图块类型整体考虑，不围着单个应用打补丁。实现在 `PanelView` 的 `PlainRightClickCatcher` 与 `PanelPresenter.itemSecondary`。上游 0.4.0 的做法是右键先出 Dimble 菜单、再点一次才弹应用菜单并收起面板，同步时保留本地做法。
 
 **同步上游的做法：**
 - 远程：`origin` 是用户自己的 fork（`ZhangJiShun/dimble`），`upstream` 是 `fif7y/dimble`。
@@ -120,5 +137,6 @@ scripts/dev-install.sh --rollback                   # 换回上一个版本
 - 引擎在 `stop()` 之后仍可能被 `setModel` 重新触发（退出窗口期）；`ItemEnumerator` 里子元素的 AX 读取没设超时、一处 `as! AXValue` 强转。
 - 辅助进程通信无鉴权、无协议版本号；辅助进程的日志用 `os.Logger`，在 macOS 27 beta 上到不了统一日志。
 - 快捷键冲突提示文案写「被其他 App 占用」，即使占用方是 Dimble 自己的另一个槽位。
-- `ClockClickRelay` 会吞掉全屏 App 自动隐藏菜单栏时右上角的点击；`SeparatorManager` 切换样式后宽度不恢复；`AgentPositionStore` 把同一 App 的多个图标顺序写成相同值；拖拽 y 坐标写死 12。
+- （2026-11-17 已修、待实机确认：`ClockClickRelay` 在菜单栏没真正显示时放行点击，判断在 `PelmetCore/MenuBarShown`，日志搜 `clock: click at`。）
+- `SeparatorManager` 切换样式后宽度不恢复；`AgentPositionStore` 把同一 App 的多个图标顺序写成相同值；拖拽 y 坐标写死 12。
 - 设置损坏时数组整体回落默认；保存遇到 NaN 静默失败；`make-dmg.sh` 卷名冲突会操作别的卷；录屏和 Focus 子进程没有超时。
